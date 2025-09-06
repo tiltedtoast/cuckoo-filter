@@ -4,13 +4,14 @@
 #include <cuda/std/cstdlib>
 #include <iostream>
 #include <random>
+#include "common.cuh"
 
 cuda::std::byte* rand_string(size_t size, size_t seed = 0) {
     std::mt19937 mt(seed);
     std::uniform_int_distribution<uint8_t> dist(48, 122);
 
     cuda::std::byte* string;
-    cudaMallocHost(&string, size);
+    CUDA_CALL(cudaMallocHost(&string, size));
 
     for (size_t i = 0; i < size; ++i) {
         string[i] = static_cast<cuda::std::byte>(dist(mt));
