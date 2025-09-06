@@ -15,8 +15,8 @@
       llvm = pkgs.llvmPackages_20;
 
       cuda = {
-        arch = "1200";
-        sm_target = "sm_120";
+        arch = "800";
+        sm_target = "sm_80";
         path = cudaPkgs.cudatoolkit;
         version = {
           complete = cudaPkgs.cudaMajorMinorVersion;

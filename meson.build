@@ -6,7 +6,12 @@ project(
     default_options: ['warning_level=3', 'cpp_std=c++20'],
 )
 
-cuda_args = ['--expt-extended-lambda']
+cuda_args = [
+    '--expt-extended-lambda',
+    '--expt-relaxed-constexpr',
+    '-gencode', 'arch=compute_80,code=sm_80',
+    '-gencode', 'arch=compute_120,code=sm_120',
+]
 
 cmake = import('cmake')
 
