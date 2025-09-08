@@ -61,22 +61,22 @@ int main() {
 
     start = std::chrono::high_resolution_clock::now();
 
-    size_t buckets_gpu_counter =
-        buckets_table_gpu.insertMany(input.data(), n);
+    size_t buckets_gpu_counter = buckets_table_gpu.insertMany(input.data(), n);
     auto buckets_gpu_mask = buckets_table_gpu.containsMany(input.data(), n);
 
     end = std::chrono::high_resolution_clock::now();
     auto buckets_gpu_duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-    std::cout << "NaiveTable:\t\tInserted & Queried " << naive_count << " / " << n
-              << " elements in " << naive_duration.count() << " ms" << "\t(" << count_ones(naive_mask, n) << " found)"
+    std::cout << "NaiveTable:\t\tInserted & Queried " << naive_count << " / "
+              << n << " elements in " << naive_duration.count() << " ms"
+              << "\t(" << count_ones(naive_mask, n) << " found)" << std::endl;
+    std::cout << "BucketsTableCpu:\tInserted & Queried " << buckets_count
+              << " / " << n << " elements in " << buckets_duration.count()
+              << " ms" << "\t(" << count_ones(buckets_mask, n) << " found)"
               << std::endl;
-    std::cout << "BucketsTableCpu:\tInserted & Queried " << buckets_count << " / " << n
-              << " elements in " << buckets_duration.count() << " ms" << "\t(" << count_ones(buckets_mask, n) << " found)"
+    std::cout << "BucketsTableGpu:\tInserted & Queried " << buckets_gpu_counter
+              << " / " << n << " elements in " << buckets_gpu_duration.count()
+              << " ms" << "\t(" << count_ones(buckets_gpu_mask, n) << " found)"
               << std::endl;
-    std::cout << "BucketsTableGpu:\tInserted & Queried " << buckets_gpu_counter << " / " << n
-              << " elements in " << buckets_gpu_duration.count() << " ms" << "\t(" << count_ones(buckets_gpu_mask, n) << " found)"
-              << std::endl;
-
 }

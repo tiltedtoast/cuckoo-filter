@@ -156,7 +156,7 @@ class BucketsTableGpu {
     SpinLock* d_locks{};
     curandState* d_rand_states{};
 
-    size_t* d_numOccupied;
+    size_t* d_numOccupied{};
     size_t h_numOccupied = 0;
 
     template <typename H>
