@@ -1,26 +1,36 @@
+#include <cstdint>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
-#include <cuda/std/cstdlib>
 #include <iostream>
 #include <random>
 #include "common.cuh"
 #include "NaiveTable.cuh"
 
-
 int main() {
-    auto table = NaiveTable<uint32_t, 16>();
+    auto table = NaiveTable<uint32_t, 16, 2048>();
 
-    const uint32_t input[] = {1, 2, 3, 4, 5};
+    const size_t n = 1000;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dis(1, UINT32_MAX);
 
-    for (auto key : input) {
-        table.insert(key);
+    auto input = std::vector<uint32_t>(n);
+
+    size_t count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        input[i] = dis(gen);
+        count += size_t(table.insert(input[i]));
     }
 
-    const uint32_t test_keys[] = {1, 2, 3, 4, 5, 6, 7, 8};
-    size_t size = sizeof(test_keys) / sizeof(test_keys[0]);
+    std::cout << "Inserted " << count << " / " << n << " elements."
+              << std::endl;
 
-    auto mask = table.containsMany(test_keys, size);
-    for (size_t i = 0; i < size; ++i) {
-        std::cout << test_keys[i] << ": " << mask[i] << std::endl;
+    auto mask = table.containsMany(input.data(), n);
+    for (size_t i = 0; i < n; ++i) {
+        if (!mask[i]) {
+            std::cout << "Error: key " << input[i] << " not found!"
+                      << std::endl;
+        }
     }
 }

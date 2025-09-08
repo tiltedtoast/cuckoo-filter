@@ -1,9 +1,12 @@
 #include <atomic>
+#include <cstring>
 #include <cuco/hash_functions.cuh>
 #include <cuda/std/atomic>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
 #include <cuda/std/functional>
+#include <iostream>
+#include <vector>
 #include "common.cuh"
 
 constexpr bool powerOfTwo(size_t n) {
@@ -13,37 +16,39 @@ constexpr bool powerOfTwo(size_t n) {
 template <
     typename T,
     size_t bitsPerTag,
+    size_t numSlots,
     size_t maxProbes,
-    size_t blockSize,
-    size_t initialNumSlot>
+    size_t blockSize>
 class NaiveTable;
 
 template <
     typename T,
     size_t bitsPerTag,
+    size_t numSlots,
     size_t maxProbes,
-    size_t blockSize,
-    size_t initialNumSlots>
+    size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize, initialNumSlots>::
+    typename NaiveTable<T, bitsPerTag, numSlots, maxProbes, blockSize>::
         DeviceTableView table_view
 );
 
 template <
     typename T,
     size_t bitsPerTag,
+    size_t numSlots = 256,
     size_t maxProbes = 500,
-    size_t blockSize = 256,
-    size_t initialNumSlots = 256>
+    size_t blockSize = 256>
 class NaiveTable {
     static_assert(bitsPerTag <= 64, "The tag cannot be larger than 64 bits");
+    static_assert(bitsPerTag >= 1, "The tag must be at least 1 bit");
     static_assert(
         bitsPerTag <= 8 * sizeof(T),
         "The tag cannot be larger than the size of the type"
     );
+    static_assert(powerOfTwo(numSlots), "Number of slots must be a power of 2");
 
     using TagType = typename std::conditional<
         bitsPerTag <= 8,
@@ -54,213 +59,123 @@ class NaiveTable {
             typename std::conditional<bitsPerTag <= 32, uint32_t, uint64_t>::
                 type>::type>::type;
 
-    struct Slot {
-        TagType tag;
-        T value;
-    };
-
     static constexpr TagType EMPTY = 0;
-
     static constexpr size_t tagMask = (1ULL << bitsPerTag) - 1;
 
-    Slot* h_slots;
-    Slot* d_slots;
+    TagType* h_slots;
+    TagType* d_slots;
+    std::atomic<size_t> numOccupied{0};
 
-    size_t numEvictions = 0;
-    size_t numSlots;
-    cuda::std::atomic_size_t numOccupied = 0;
-
-    using HashFn = uint32_t (*)(const T&, size_t);
-    HashFn hashFns[2] = {nullptr, nullptr};
-
-    static __host__ __device__ uint32_t murmur_hash(const T& key, size_t size) {
+    template <typename H>
+    static __host__ __device__ uint32_t hash(const H& key) {
         auto bytes = reinterpret_cast<const cuda::std::byte*>(&key);
-        cuco::murmurhash3_32<T> hasher;
-        return hasher.compute_hash(bytes, size);
+        cuco::xxhash_32<H> hasher;
+        return hasher.compute_hash(bytes, sizeof(H));
     }
 
-    static __host__ __device__ uint32_t xxhash_hash(const T& key, size_t size) {
-        auto bytes = reinterpret_cast<const cuda::std::byte*>(&key);
-        cuco::xxhash_32<T> hasher;
-        return hasher.compute_hash(bytes, size);
+    static __host__ __device__ TagType fingerprint(const T& key) {
+        uint32_t hash_val = hash(key);
+        auto fp = static_cast<TagType>(hash_val & tagMask);
+        // 0 is reserved for empty slots
+        return fp == 0 ? 1 : fp;
     }
 
-    __host__ bool try_insert(TagType tag, const T& value, size_t i) {
-        if (h_slots[i].tag == EMPTY) {
-            h_slots[i].tag = tag;
-            h_slots[i].value = value;
+    static __host__ __device__ cuda::std::tuple<size_t, size_t, TagType>
+    getCandidateSlots(const T& key) {
+        TagType fp = fingerprint(key);
+        size_t h1 = hash(key) & (numSlots - 1);
+        size_t h2 = h1 ^ (hash(fp) & (numSlots - 1));
+        return {h1, h2, fp};
+    }
+
+    __host__ __device__ size_t getAlternateSlot(size_t slot, TagType fp) const {
+        return slot ^ (hash(fp) & (numSlots - 1));
+    }
+
+    __host__ bool tryInsertAtSlot(size_t slot, TagType tag) {
+        if (h_slots[slot] == EMPTY) {
+            h_slots[slot] = tag;
             numOccupied++;
             return true;
         }
         return false;
     }
 
-    __host__ void rehash() {
-        size_t oldNumSlots = numSlots;
-        numSlots *= 2;
+    __host__ bool insertWithEviction(TagType fp, size_t start_slot) {
+        TagType current_fp = fp;
+        size_t current_slot = start_slot;
 
-        Slot* new_h_slots;
-        CUDA_CALL(cudaMallocHost(&new_h_slots, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMemset(new_h_slots, 0, numSlots * sizeof(Slot)));
-
-        auto* temp_slots = new Slot[oldNumSlots];
-        CUDA_CALL(cudaMemcpy(
-            temp_slots,
-            h_slots,
-            oldNumSlots * sizeof(Slot),
-            cudaMemcpyDeviceToHost
-        ));
-
-        CUDA_CALL(cudaFreeHost(h_slots));
-        CUDA_CALL(cudaFree(d_slots));
-
-        h_slots = new_h_slots;
-        CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(Slot)));
-
-        for (size_t i = 0; i < oldNumSlots; ++i) {
-            if (temp_slots[i].tag != EMPTY) {
-                T currentValue = temp_slots[i].value;
-                TagType currentTag = temp_slots[i].tag;
-
-                size_t evictions = 0;
-
-                do {
-                    auto i1 =
-                        murmur_hash(currentValue, sizeof(T)) & (numSlots - 1);
-                    auto i2 = i1 ^ (xxhash_hash(currentValue, sizeof(T)) &
-                                    (numSlots - 1));
-
-                    if (try_insert(currentTag, currentValue, i1) ||
-                        try_insert(currentTag, currentValue, i2)) {
-                        break;
-                    }
-
-                    Slot evicted = h_slots[i1];
-                    h_slots[i1].tag = currentTag;
-                    h_slots[i1].value = currentValue;
-
-                    currentTag = evicted.tag;
-                    currentValue = evicted.value;
-
-                    evictions++;
-                } while (evictions < maxProbes);
-
-                // We have a BIG problem as there are A LOT of collisions
-                // Go fix your hash functions I suppose
-                throw std::runtime_error(
-                    "Rehashing failed, too many evictions"
-                );
+        for (size_t evictions = 0; evictions < maxProbes; ++evictions) {
+            if (tryInsertAtSlot(current_slot, current_fp)) {
+                return true;
             }
 
-            CUDA_CALL(cudaMemcpy(
-                d_slots,
-                h_slots,
-                numSlots * sizeof(Slot),
-                cudaMemcpyHostToDevice
-            ));
+            TagType evicted_fp = h_slots[current_slot];
+            h_slots[current_slot] = current_fp;
 
-            delete[] temp_slots;
-            numEvictions = 0;
+            current_fp = evicted_fp;
+            current_slot = getAlternateSlot(current_slot, evicted_fp);
         }
-    };
 
-   public:
-    explicit NaiveTable(size_t numSlots = initialNumSlots)
-        : numSlots(numSlots) {
-        CUDA_CALL(cudaMallocHost(&h_slots, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMemset(h_slots, 0, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMemcpy(
-            d_slots, h_slots, numSlots * sizeof(Slot), cudaMemcpyHostToDevice
-        ));
-
-        hashFns[0] = &murmur_hash;
-        hashFns[1] = &xxhash_hash;
+        return false;
     }
 
-    NaiveTable(T* items, size_t n, size_t numSlots = initialNumSlots)
-        : numSlots(numSlots) {
-        CUDA_CALL(cudaMallocHost(&h_slots, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMemset(h_slots, 0, numSlots * sizeof(Slot)));
-        CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(Slot)));
+   public:
+    explicit NaiveTable() {
+        CUDA_CALL(cudaMallocHost(&h_slots, numSlots * sizeof(TagType)));
+        CUDA_CALL(cudaMemset(h_slots, 0, numSlots * sizeof(TagType)));
+        CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMemcpy(
-            d_slots, h_slots, numSlots * sizeof(Slot), cudaMemcpyHostToDevice
+            d_slots, h_slots, numSlots * sizeof(TagType), cudaMemcpyHostToDevice
         ));
+    }
 
+    NaiveTable(T* items, size_t n) : NaiveTable(numSlots) {
         for (size_t i = 0; i < n; ++i) {
             insert(items[i]);
         }
-    };
+    }
 
-    // Inside NaiveTable class definition
-
-    __host__ void insert(const T& key) {
+    __host__ void syncToDevice() {
         CUDA_CALL(cudaMemcpy(
-            h_slots, d_slots, numSlots * sizeof(Slot), cudaMemcpyDeviceToHost
+            d_slots, h_slots, numSlots * sizeof(TagType), cudaMemcpyHostToDevice
         ));
+    }
 
-        while (true) {
-            auto tag =
-                static_cast<TagType>(murmur_hash(key, sizeof(T)) & tagMask);
-            auto i1 = murmur_hash(key, sizeof(T)) & (numSlots - 1);
-            auto i2 = i1 ^ (xxhash_hash(key, sizeof(T)) & (numSlots - 1));
+    __host__ bool insert(const T& key) {
+        auto [h1, h2, fp] = getCandidateSlots(key);
 
-            T currentValue = key;
-            TagType currentTag = tag;
-
-            numEvictions = 0;
-
-            do {
-                if (try_insert(currentTag, currentValue, i1) ||
-                    try_insert(currentTag, currentValue, i2)) {
-                    CUDA_CALL(cudaMemcpy(
-                        d_slots,
-                        h_slots,
-                        numSlots * sizeof(Slot),
-                        cudaMemcpyHostToDevice
-                    ));
-                    return;
-                }
-
-                Slot evicted = h_slots[i1];
-                h_slots[i1].tag = currentTag;
-                h_slots[i1].value = currentValue;
-
-                currentTag = evicted.tag;
-                currentValue = evicted.value;
-
-                i1 = murmur_hash(currentValue, sizeof(T)) & (numSlots - 1);
-                i2 = i1 ^
-                     (xxhash_hash(currentValue, sizeof(T)) & (numSlots - 1));
-
-                numEvictions++;
-            } while (numEvictions < maxProbes);
-
-            rehash();
+        if (tryInsertAtSlot(h1, fp) || tryInsertAtSlot(h2, fp)) {
+            return true;
         }
-    };
-    void insertMany(const T* keys, bool* output, size_t n) {
-        size_t numBlocks = (n + blockSize - 1) / blockSize;
+
+        return insertWithEviction(fp, h1);
+    }
+
+    __host__ bool contains(const T& key) const {
+        auto [h1, h2, fp] = getCandidateSlots(key);
+        return (h_slots[h1] == fp) || (h_slots[h2] == fp);
     }
 
     const bool* containsMany(const T* keys, const size_t n) {
         bool* d_output;
         bool* h_output;
         T* d_keys;
+
+        assert(n <= numSlots && "n may not be larger than numSlots");
+
         CUDA_CALL(cudaMallocHost(&h_output, n * sizeof(bool)));
         CUDA_CALL(cudaMalloc(&d_output, n * sizeof(bool)));
-
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
+
         CUDA_CALL(
             cudaMemcpy(d_keys, keys, n * sizeof(T), cudaMemcpyHostToDevice)
         );
 
-        CUDA_CALL(cudaMemcpy(
-            d_slots, h_slots, numSlots * sizeof(Slot), cudaMemcpyHostToDevice
-        ));
+        syncToDevice();
 
         size_t numBlocks = (n + blockSize - 1) / blockSize;
-        containsKernel<T, bitsPerTag, maxProbes, blockSize, initialNumSlots>
+        containsKernel<T, bitsPerTag, numSlots, maxProbes, blockSize>
             <<<numBlocks, blockSize>>>(
                 d_keys, d_output, n, this->get_device_view()
             );
@@ -269,34 +184,52 @@ class NaiveTable {
         CUDA_CALL(cudaMemcpy(
             h_output, d_output, n * sizeof(bool), cudaMemcpyDeviceToHost
         ));
+
         CUDA_CALL(cudaFree(d_output));
+        CUDA_CALL(cudaFree(d_keys));
 
         return h_output;
-    };
+    }
 
-    __device__ __host__ float loadFactor() const {
+    __host__ bool remove(const T& key) {
+        auto [h1, h2, fp] = getCandidateSlots(key);
+
+        if (h_slots[h1] == fp) {
+            h_slots[h1] = EMPTY;
+            numOccupied--;
+            syncToDevice();
+            return true;
+        }
+
+        if (h_slots[h2] == fp) {
+            h_slots[h2] = EMPTY;
+            numOccupied--;
+            syncToDevice();
+            return true;
+        }
+
+        return false;
+    }
+
+    __host__ float loadFactor() const {
         return static_cast<float>(numOccupied.load()) / numSlots;
-    };
+    }
+
+    __device__ __host__ double expectedFalsePositiveRate() const {
+        return 1.0 / (1ULL << bitsPerTag);
+    }
 
     struct DeviceTableView {
-        Slot* d_slots;
-        size_t numSlots;
-        TagType tagMask;
+        TagType* d_slots;
 
         __device__ bool contains(const T& key) const {
-            auto tag =
-                static_cast<TagType>(murmur_hash(key, sizeof(T)) & tagMask);
-            auto i1 = murmur_hash(key, sizeof(T)) & (numSlots - 1);
-            auto i2 = i1 ^ (xxhash_hash(key, sizeof(T)) & (numSlots - 1));
-
-            return (d_slots[i1].tag == tag) || (d_slots[i2].tag == tag);
-        };
+            auto [h1, h2, fp] = NaiveTable::getCandidateSlots(key);
+            return (d_slots[h1] == fp) || (d_slots[h2] == fp);
+        }
     };
 
     __host__ DeviceTableView get_device_view() {
-        return DeviceTableView{
-            d_slots, numSlots, static_cast<TagType>(tagMask)
-        };
+        return DeviceTableView{d_slots};
     }
 
     ~NaiveTable() {
@@ -312,14 +245,14 @@ class NaiveTable {
 template <
     typename T,
     size_t bitsPerTag,
-    size_t maxProbes = 500,
-    size_t blockSize = 256,
-    size_t initialNumSlots = 256>
+    size_t numSlots,
+    size_t maxProbes,
+    size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize, initialNumSlots>::
+    typename NaiveTable<T, bitsPerTag, numSlots, maxProbes, blockSize>::
         DeviceTableView table_view
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
