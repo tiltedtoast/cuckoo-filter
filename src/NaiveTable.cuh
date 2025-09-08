@@ -9,10 +9,6 @@
 #include <vector>
 #include "common.cuh"
 
-constexpr bool powerOfTwo(size_t n) {
-    return n != 0 && (n & (n - 1)) == 0;
-}
-
 template <
     typename T,
     size_t bitsPerTag,
@@ -42,7 +38,7 @@ template <
     size_t maxProbes = 500,
     size_t blockSize = 256>
 class NaiveTable {
-    static_assert(bitsPerTag <= 64, "The tag cannot be larger than 64 bits");
+    static_assert(bitsPerTag <= 32, "The tag cannot be larger than 32 bits");
     static_assert(bitsPerTag >= 1, "The tag must be at least 1 bit");
     static_assert(
         bitsPerTag <= 8 * sizeof(T),
@@ -53,11 +49,8 @@ class NaiveTable {
     using TagType = typename std::conditional<
         bitsPerTag <= 8,
         uint8_t,
-        typename std::conditional<
-            bitsPerTag <= 16,
-            uint16_t,
-            typename std::conditional<bitsPerTag <= 32, uint32_t, uint64_t>::
-                type>::type>::type;
+        typename std::conditional<bitsPerTag <= 16, uint16_t, uint32_t>::type>::
+        type;
 
     static constexpr TagType EMPTY = 0;
     static constexpr size_t tagMask = (1ULL << bitsPerTag) - 1;
@@ -209,6 +202,12 @@ class NaiveTable {
         }
 
         return false;
+    }
+
+    __host__ void clear() {
+        std::memset(h_slots, 0, numSlots * sizeof(TagType));
+        CUDA_CALL(cudaMemset(d_slots, 0, numSlots * sizeof(TagType)));
+        numOccupied = 0;
     }
 
     __host__ float loadFactor() const {
