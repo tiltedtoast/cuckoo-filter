@@ -33,52 +33,52 @@ int main() {
         input[i] = dis(gen);
     }
 
-    // auto naive_table = NaiveTable<uint32_t, 32, n * 2, 1000>();
-    // auto start = std::chrono::high_resolution_clock::now();
+    auto naive_table = NaiveTable<uint32_t, 32, n * 2, 1000>();
+    auto start = std::chrono::high_resolution_clock::now();
 
-    // size_t naive_count = 0;
-    // for (size_t i = 0; i < n; ++i) {
-    //     naive_count += size_t(naive_table.insert(input[i]));
-    // }
+    size_t naive_count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        naive_count += size_t(naive_table.insert(input[i]));
+    }
 
-    // auto naive_mask = naive_table.containsMany(input, n);
-    // auto end = std::chrono::high_resolution_clock::now();
-    // auto naive_duration =
-    //     std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    auto naive_mask = naive_table.containsMany(input, n);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto naive_duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-    // auto buckets_table = BucketsTableCpu<uint32_t, 32, 32, n / 32, 1000>();
+    auto buckets_table = BucketsTableCpu<uint32_t, 32, 32, n / 32, 1000>();
 
-    // start = std::chrono::high_resolution_clock::now();
+    start = std::chrono::high_resolution_clock::now();
 
-    // size_t buckets_count = 0;
-    // for (size_t i = 0; i < n; ++i) {
-    //     buckets_count += size_t(buckets_table.insert(input[i]));
-    // }
+    size_t buckets_count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        buckets_count += size_t(buckets_table.insert(input[i]));
+    }
 
-    // auto buckets_mask = buckets_table.containsMany(input, n);
-    // end = std::chrono::high_resolution_clock::now();
-    // auto buckets_duration =
-    //     std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    auto buckets_mask = buckets_table.containsMany(input, n);
+    end = std::chrono::high_resolution_clock::now();
+    auto buckets_duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
     auto buckets_table_gpu = BucketsTableGpu<uint32_t, 32, 32, n / 32, 1000>();
 
-    auto start = std::chrono::high_resolution_clock::now();
+    start = std::chrono::high_resolution_clock::now();
 
     size_t buckets_gpu_counter = buckets_table_gpu.insertMany(input, n);
     auto buckets_gpu_mask = buckets_table_gpu.containsMany(input, n);
 
-    auto end = std::chrono::high_resolution_clock::now();
+    end = std::chrono::high_resolution_clock::now();
     auto buckets_gpu_duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-    // std::cout << "NaiveTable:\t\tInserted & Queried " << naive_count << " / "
-    //           << n << " elements in " << naive_duration.count() << " ms"
-    //           << "\t(" << count_ones(naive_mask, n) << " found)" <<
-    //           std::endl;
-    // std::cout << "BucketsTableCpu:\tInserted & Queried " << buckets_count
-    //           << " / " << n << " elements in " << buckets_duration.count()
-    //           << " ms" << "\t(" << count_ones(buckets_mask, n) << " found)"
-    //           << std::endl;
+    std::cout << "NaiveTable:\t\tInserted & Queried " << naive_count << " / "
+              << n << " elements in " << naive_duration.count() << " ms"
+              << "\t(" << count_ones(naive_mask, n) << " found)" <<
+              std::endl;
+    std::cout << "BucketsTableCpu:\tInserted & Queried " << buckets_count
+              << " / " << n << " elements in " << buckets_duration.count()
+              << " ms" << "\t(" << count_ones(buckets_mask, n) << " found)"
+              << std::endl;
     std::cout << "BucketsTableGpu:\tInserted & Queried " << buckets_gpu_counter
               << " / " << n << " elements in " << buckets_gpu_duration.count()
               << " ms" << "\t(" << count_ones(buckets_gpu_mask, n) << " found)"

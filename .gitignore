@@ -8,3 +8,4 @@ build
 !/subprojects/packagefiles
 *.*-rep
 *.sqlite
+*.html

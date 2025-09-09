@@ -39,7 +39,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize,
     size_t numBuckets,
-    size_t maxProbes,
+    size_t maxEvictions,
     size_t blockSize>
 class BucketsTableGpu;
 
@@ -48,7 +48,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize,
     size_t numBuckets,
-    size_t maxProbes,
+    size_t maxEvictions,
     size_t blockSize>
 __global__ void insertKernel(
     const T* keys,
@@ -58,7 +58,7 @@ __global__ void insertKernel(
         bitsPerTag,
         bucketSize,
         numBuckets,
-        maxProbes,
+        maxEvictions,
         blockSize>::DeviceTableView table_view
 );
 
@@ -67,7 +67,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize,
     size_t numBuckets,
-    size_t maxProbes,
+    size_t maxEvictions,
     size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
@@ -78,7 +78,7 @@ __global__ void containsKernel(
         bitsPerTag,
         bucketSize,
         numBuckets,
-        maxProbes,
+        maxEvictions,
         blockSize>::DeviceTableView table_view
 );
 
@@ -87,7 +87,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize = 32,
     size_t numBuckets = 256,
-    size_t maxProbes = 500,
+    size_t maxEvictions = 500,
     size_t blockSize = 256>
 class BucketsTableGpu {
     static_assert(bitsPerTag <= 32, "The tag cannot be larger than 32 bits");
@@ -101,10 +101,6 @@ class BucketsTableGpu {
         "Number of buckets must be a power of 2"
     );
     static_assert(bucketSize > 0, "Bucket size must be greater than 0");
-    static_assert(
-        bucketSize <= 32,
-        "Bucket size must be <= 32 for warp operations"
-    );
 
    public:
     using TagType = typename std::conditional<
@@ -118,34 +114,6 @@ class BucketsTableGpu {
 
     struct __align__(alignof(TagType)) Bucket {
         TagType tags[bucketSize];
-
-        __device__ int findEmptySlotWarp() const {
-            unsigned int lane_id = threadIdx.x & 31;
-            bool has_empty = false;
-
-            if (lane_id < bucketSize) {
-                has_empty = (tags[lane_id] == EMPTY);
-            }
-
-            unsigned int mask = __ballot_sync(0xffffffff, has_empty);
-            if (mask == 0) {
-                return -1;
-            }
-
-            return __ffs(mask) - 1;
-        }
-
-        __device__ bool containsWarp(TagType tag) const {
-            unsigned int lane_id = threadIdx.x & 31;
-            bool found = false;
-
-            if (lane_id < bucketSize) {
-                found = (tags[lane_id] == tag);
-            }
-
-            unsigned int mask = __ballot_sync(0xffffffff, found);
-            return mask != 0;
-        }
 
         __device__ int findEmptySlot() const {
             for (size_t i = 0; i < bucketSize; ++i) {
@@ -182,11 +150,6 @@ class BucketsTableGpu {
         __device__ TagType getTagAt(size_t slot) const {
             return tags[slot];
         }
-    };
-
-    struct InsertionCandidate {
-        size_t bucket_idx;
-        TagType fingerprint;
     };
 
    private:
@@ -270,6 +233,7 @@ class BucketsTableGpu {
         for (size_t i = 0; i < numStreams; ++i) {
             size_t offset = i * chunkSize;
             size_t currentChunkSize = std::min(chunkSize, n - offset);
+
             if (currentChunkSize > 0) {
                 CUDA_CALL(cudaMemcpyAsync(
                     d_keys + offset,
@@ -278,24 +242,26 @@ class BucketsTableGpu {
                     cudaMemcpyHostToDevice,
                     streams[i]
                 ));
+
+                size_t numBlocks = SDIV(currentChunkSize, blockSize);
+                insertKernel<
+                    T,
+                    bitsPerTag,
+                    bucketSize,
+                    numBuckets,
+                    maxEvictions,
+                    blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
+                    d_keys + offset, currentChunkSize, get_device_view()
+                );
             }
         }
 
+        CUDA_CALL(cudaDeviceSynchronize());
+
         for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamSynchronize(stream));
             CUDA_CALL(cudaStreamDestroy(stream));
         }
 
-        size_t numBlocks = SDIV(n, blockSize);
-        insertKernel<
-            T,
-            bitsPerTag,
-            bucketSize,
-            numBuckets,
-            maxProbes,
-            blockSize><<<numBlocks, blockSize>>>(d_keys, n, get_device_view());
-
-        CUDA_CALL(cudaDeviceSynchronize());
         CUDA_CALL(cudaFree(d_keys));
 
         CUDA_CALL(cudaMemcpy(
@@ -344,7 +310,7 @@ class BucketsTableGpu {
                     bitsPerTag,
                     bucketSize,
                     numBuckets,
-                    maxProbes,
+                    maxEvictions,
                     blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset,
                     d_output + offset,
@@ -362,8 +328,9 @@ class BucketsTableGpu {
             }
         }
 
+        CUDA_CALL(cudaDeviceSynchronize());
+
         for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamSynchronize(stream));
             CUDA_CALL(cudaStreamDestroy(stream));
         }
 
@@ -400,38 +367,6 @@ class BucketsTableGpu {
         curandState* d_rand_states;
         size_t* d_numOccupied;
 
-        __device__ bool tryInsertAtBucketWarp(size_t bucketIdx, TagType tag) {
-            unsigned int lane_id = threadIdx.x & 31;
-            bool success = false;
-
-            if (lane_id == 0) {
-                d_locks[bucketIdx].lock();
-            }
-            __syncwarp();
-
-            int slot = d_buckets[bucketIdx].findEmptySlotWarp();
-
-            if (slot != -1) {
-                if (lane_id == slot) {
-                    d_buckets[bucketIdx].insertAt(slot, tag);
-                    atomicAdd(
-                        reinterpret_cast<unsigned long long*>(d_numOccupied),
-                        1ULL
-                    );
-                    success = true;
-                }
-            }
-
-            bool was_successful = (__ballot_sync(0xffffffff, success) != 0);
-
-            if (lane_id == 0) {
-                d_locks[bucketIdx].unlock();
-            }
-            __syncwarp();
-
-            return was_successful;
-        }
-
         __device__ bool tryInsertAtBucket(size_t bucketIdx, TagType tag) {
             d_locks[bucketIdx].lock();
 
@@ -448,45 +383,11 @@ class BucketsTableGpu {
             return false;
         }
 
-        __device__ bool insertWithEvictionWarp(TagType fp, size_t startBucket) {
-            TagType currentFp = fp;
-            size_t currentBucket = startBucket;
-            unsigned int lane_id = threadIdx.x & 31;
-
-            for (size_t evictions = 0; evictions < maxProbes; ++evictions) {
-                if (tryInsertAtBucketWarp(currentBucket, currentFp)) {
-                    return true;
-                }
-
-                TagType evictedFp = 0;
-                if (lane_id == 0) {
-                    d_locks[currentBucket].lock();
-
-                    curandState* state = &d_rand_states[currentBucket];
-                    auto evictSlot =
-                        static_cast<size_t>(curand_uniform(state) * bucketSize);
-
-                    evictedFp = d_buckets[currentBucket].getTagAt(evictSlot);
-                    d_buckets[currentBucket].insertAt(evictSlot, currentFp);
-
-                    d_locks[currentBucket].unlock();
-                }
-
-                currentFp = __shfl_sync(0xffffffff, evictedFp, 0);
-
-                currentBucket = BucketsTableGpu::getAlternateBucket(
-                    currentBucket, currentFp
-                );
-            }
-
-            return false;
-        }
-
         __device__ bool insertWithEviction(TagType fp, size_t startBucket) {
             TagType currentFp = fp;
             size_t currentBucket = startBucket;
 
-            for (size_t evictions = 0; evictions < maxProbes; ++evictions) {
+            for (size_t evictions = 0; evictions < maxEvictions; ++evictions) {
                 d_locks[currentBucket].lock();
 
                 int slot = d_buckets[currentBucket].findEmptySlot();
@@ -517,27 +418,12 @@ class BucketsTableGpu {
             return false;
         }
 
-        __device__ bool insertWarp(const T& key) {
-            auto [h1, h2, fp] = BucketsTableGpu::getCandidateBuckets(key);
-            if (tryInsertAtBucketWarp(h1, fp) ||
-                tryInsertAtBucketWarp(h2, fp)) {
-                return true;
-            }
-            return insertWithEvictionWarp(fp, h1);
-        }
-
         __device__ bool insert(const T& key) {
             auto [h1, h2, fp] = BucketsTableGpu::getCandidateBuckets(key);
             if (tryInsertAtBucket(h1, fp) || tryInsertAtBucket(h2, fp)) {
                 return true;
             }
             return insertWithEviction(fp, h1);
-        }
-
-        __device__ bool containsWarp(const T& key) const {
-            auto [h1, h2, fp] = BucketsTableGpu::getCandidateBuckets(key);
-            return d_buckets[h1].containsWarp(fp) ||
-                   d_buckets[h2].containsWarp(fp);
         }
 
         __device__ bool contains(const T& key) const {
@@ -558,7 +444,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize,
     size_t numBuckets,
-    size_t maxProbes,
+    size_t maxEvictions,
     size_t blockSize>
 __global__ void insertKernel(
     const T* keys,
@@ -568,17 +454,12 @@ __global__ void insertKernel(
         bitsPerTag,
         bucketSize,
         numBuckets,
-        maxProbes,
+        maxEvictions,
         blockSize>::DeviceTableView table_view
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        // table_view.insert(keys[idx]);
-        if (blockSize & 31 == 0) {
-            table_view.insertWarp(keys[idx]);
-        } else {
-            table_view.insert(keys[idx]);
-        }
+        table_view.insert(keys[idx]);
     }
 }
 
@@ -587,7 +468,7 @@ template <
     size_t bitsPerTag,
     size_t bucketSize,
     size_t numBuckets,
-    size_t maxProbes,
+    size_t maxEvictions,
     size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
@@ -598,15 +479,11 @@ __global__ void containsKernel(
         bitsPerTag,
         bucketSize,
         numBuckets,
-        maxProbes,
+        maxEvictions,
         blockSize>::DeviceTableView table_view
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        if (blockSize & 31 == 0) {
-            output[idx] = table_view.containsWarp(keys[idx]);
-        } else {
-            output[idx] = table_view.contains(keys[idx]);
-        }
+        output[idx] = table_view.contains(keys[idx]);
     }
 }
