@@ -64,8 +64,11 @@ int main() {
 
     auto start = std::chrono::high_resolution_clock::now();
 
+    bool* buckets_gpu_mask;
+    CUDA_CALL(cudaMallocHost(&buckets_gpu_mask, n * sizeof(bool)));
+
     size_t buckets_gpu_counter = buckets_table_gpu.insertMany(input, n);
-    auto buckets_gpu_mask = buckets_table_gpu.containsMany(input, n);
+    buckets_table_gpu.containsMany(input, n, buckets_gpu_mask);
 
     auto end = std::chrono::high_resolution_clock::now();
     auto buckets_gpu_duration =

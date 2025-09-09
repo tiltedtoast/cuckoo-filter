@@ -176,9 +176,9 @@ class BucketsTableGpu {
     static __host__ __device__ cuda::std::tuple<size_t, size_t, TagType>
     getCandidateBuckets(const T& key) {
         TagType fp = fingerprint(key);
-        size_t h1 = hash(key) & (numBuckets - 1);
-        size_t h2 = h1 ^ (hash(fp) & (numBuckets - 1));
-        return {h1, h2, fp};
+        size_t i1 = hash(key) & (numBuckets - 1);
+        size_t i2 = i1 ^ (hash(fp) & (numBuckets - 1));
+        return {i1, i2, fp};
     }
 
     static __host__ __device__ size_t
@@ -274,12 +274,9 @@ class BucketsTableGpu {
         return h_numOccupied;
     }
 
-    bool* containsMany(const T* keys, const size_t n) {
+    void containsMany(const T* keys, const size_t n, bool* output) {
         T* d_keys;
         bool* d_output;
-        bool* h_output;
-
-        CUDA_CALL(cudaMallocHost(&h_output, n * sizeof(bool)));
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
         CUDA_CALL(cudaMalloc(&d_output, n * sizeof(bool)));
 
@@ -319,7 +316,7 @@ class BucketsTableGpu {
                 );
 
                 CUDA_CALL(cudaMemcpyAsync(
-                    h_output + offset,
+                    output + offset,
                     d_output + offset,
                     currentChunkSize * sizeof(bool),
                     cudaMemcpyDeviceToHost,
@@ -336,7 +333,6 @@ class BucketsTableGpu {
 
         CUDA_CALL(cudaFree(d_keys));
         CUDA_CALL(cudaFree(d_output));
-        return h_output;
     }
     void clear() {
         CUDA_CALL(cudaMemset(d_buckets, 0, numBuckets * sizeof(Bucket)));
@@ -419,19 +415,19 @@ class BucketsTableGpu {
         }
 
         __device__ bool insert(const T& key) {
-            auto [h1, h2, fp] = BucketsTableGpu::getCandidateBuckets(key);
+            auto [i1, i2, fp] = BucketsTableGpu::getCandidateBuckets(key);
 
-            if (d_buckets[h1].contains(fp) || d_buckets[h2].contains(fp)) {
+            if (d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp)) {
                 return true;
             }
 
-            if (tryInsertAtBucket(h1, fp) || tryInsertAtBucket(h2, fp)) {
+            if (tryInsertAtBucket(i1, fp) || tryInsertAtBucket(i2, fp)) {
                 return true;
             }
 
-            if (insertWithEviction(fp, h1)) {
+            if (insertWithEviction(fp, i1)) {
                 // Check if it's actually there after eviction
-                if (d_buckets[h1].contains(fp) || d_buckets[h2].contains(fp)) {
+                if (d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp)) {
                     return true;
                 }
                 return false;
@@ -440,8 +436,8 @@ class BucketsTableGpu {
         }
 
         __device__ bool contains(const T& key) const {
-            auto [h1, h2, fp] = BucketsTableGpu::getCandidateBuckets(key);
-            return d_buckets[h1].contains(fp) || d_buckets[h2].contains(fp);
+            auto [i1, i2, fp] = BucketsTableGpu::getCandidateBuckets(key);
+            return d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp);
         }
     };
 
