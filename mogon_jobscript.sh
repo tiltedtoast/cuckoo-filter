@@ -3,7 +3,7 @@
 #SBATCH -J Cuckoo-Filter    # Job name
 #SBATCH -o \%x_\%j.out      # Specify stdout output file where \%j expands to jobID and \%x to JobName
 #SBATCH -A ki-acccomp       # Account name
-#SBATCH -p a100dl           # Queue name
+#SBATCH -p a40              # Queue name
 #SBATCH -n 1                # Number of tasks
 #SBATCH -c 8                # Number of CPUs
 #SBATCH --gres=gpu:1        # Total number of GPUs
