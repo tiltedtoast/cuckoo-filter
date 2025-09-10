@@ -394,7 +394,13 @@ class BucketsTableGpu {
                 return true;
             }
 
-            return insertWithEviction(fp, i1);
+            if (insertWithEviction(fp, i1)) {
+                if (d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp)) {
+                    return true;
+                }
+                return false;
+            }
+            return false;
         }
 
         __device__ bool contains(const T& key) const {

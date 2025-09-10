@@ -7,7 +7,7 @@
 #include "BucketsTableCpu.cuh"
 #include "BucketsTableGpu.cuh"
 #include "common.cuh"
-#include "NaiveTable.cuh"
+#include "HybridTable.cuh"
 
 template <typename T>
 size_t count_ones(T* data, size_t n) {
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: " << argv[0]
                   << " <table_type> <n_exponent>" << std::endl;
         std::cerr
-            << "table_type: 0=NaiveTable, 1=BucketsTableCpu, 2=BucketsTableGpu"
+            << "table_type: 0=HybridTable, 1=BucketsTableCpu, 2=BucketsTableGpu"
             << std::endl;
         std::cerr << "n_exponent: exponent for n = 2^x" << std::endl;
         return 1;
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     }
 
     if (table_type == 0) {
-        auto table = NaiveTable<uint32_t, 32, 1000, 256>(n * 2);
+        auto table = HybridTable<uint32_t, 32, 1000, 256>(n * 2);
 
         auto start = std::chrono::high_resolution_clock::now();
         size_t count = 0;
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
                 .count();
 
         size_t found = count_ones(mask, n);
-        std::cout << "NaiveTable: Inserted " << n << " items, found " << found
+        std::cout << "HybridTable: Inserted " << n << " items, found " << found
                   << " items in " << duration << " ms" << std::endl;
     } else if (table_type == 1) {
         auto table = BucketsTableCpu<uint32_t, 32, 32, 1000>(n / 16);

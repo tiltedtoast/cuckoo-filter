@@ -10,14 +10,14 @@
 #include "common.cuh"
 
 template <typename T, size_t bitsPerTag, size_t maxProbes, size_t blockSize>
-class NaiveTable;
+class HybridTable;
 
 template <typename T, size_t bitsPerTag, size_t maxProbes, size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
+    typename HybridTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
         table_view
 );
 
@@ -26,7 +26,7 @@ template <
     size_t bitsPerTag,
     size_t maxProbes = 500,
     size_t blockSize = 256>
-class NaiveTable {
+class HybridTable {
     static_assert(bitsPerTag <= 32, "The tag cannot be larger than 32 bits");
     static_assert(bitsPerTag >= 1, "The tag must be at least 1 bit");
     static_assert(
@@ -103,7 +103,7 @@ class NaiveTable {
     }
 
    public:
-    explicit NaiveTable(size_t numSlots) : numSlots(numSlots) {
+    explicit HybridTable(size_t numSlots) : numSlots(numSlots) {
         CUDA_CALL(cudaMallocHost(&h_slots, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMemset(h_slots, 0, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(TagType)));
@@ -114,7 +114,7 @@ class NaiveTable {
         assert(powerOfTwo(numSlots) && "Number of slots must be a power of 2");
     }
 
-    NaiveTable(T* items, size_t n) : NaiveTable(numSlots) {
+    HybridTable(T* items, size_t n) : HybridTable(numSlots) {
         for (size_t i = 0; i < n; ++i) {
             insert(items[i]);
         }
@@ -214,7 +214,7 @@ class NaiveTable {
         size_t& numSlots;
 
         __device__ bool contains(const T& key) const {
-            auto [h1, h2, fp] = NaiveTable::getCandidateSlots(key, numSlots);
+            auto [h1, h2, fp] = HybridTable::getCandidateSlots(key, numSlots);
             return (d_slots[h1] == fp) || (d_slots[h2] == fp);
         }
     };
@@ -223,7 +223,7 @@ class NaiveTable {
         return DeviceTableView{d_slots, numSlots};
     }
 
-    ~NaiveTable() {
+    ~HybridTable() {
         if (h_slots) {
             CUDA_CALL(cudaFreeHost(h_slots));
         }
@@ -238,7 +238,7 @@ __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
+    typename HybridTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
         table_view
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
