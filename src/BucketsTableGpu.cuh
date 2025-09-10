@@ -25,9 +25,11 @@ struct SpinLock {
     }
 };
 
-template <size_t numBuckets>
-__global__ void
-initRandStatesKernel(curandState* states, unsigned long long seed) {
+__global__ void initRandStatesKernel(
+    curandState* states,
+    unsigned long long seed,
+    size_t numBuckets
+) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numBuckets) {
         curand_init(seed, idx, 0, &states[idx]);
@@ -38,7 +40,6 @@ template <
     typename T,
     size_t bitsPerTag,
     size_t bucketSize,
-    size_t numBuckets,
     size_t maxEvictions,
     size_t blockSize>
 class BucketsTableGpu;
@@ -47,7 +48,6 @@ template <
     typename T,
     size_t bitsPerTag,
     size_t bucketSize,
-    size_t numBuckets,
     size_t maxEvictions,
     size_t blockSize>
 __global__ void insertKernel(
@@ -57,7 +57,6 @@ __global__ void insertKernel(
         T,
         bitsPerTag,
         bucketSize,
-        numBuckets,
         maxEvictions,
         blockSize>::DeviceTableView table_view
 );
@@ -66,7 +65,6 @@ template <
     typename T,
     size_t bitsPerTag,
     size_t bucketSize,
-    size_t numBuckets,
     size_t maxEvictions,
     size_t blockSize>
 __global__ void containsKernel(
@@ -77,7 +75,6 @@ __global__ void containsKernel(
         T,
         bitsPerTag,
         bucketSize,
-        numBuckets,
         maxEvictions,
         blockSize>::DeviceTableView table_view
 );
@@ -86,7 +83,6 @@ template <
     typename T,
     size_t bitsPerTag,
     size_t bucketSize = 32,
-    size_t numBuckets = 256,
     size_t maxEvictions = 500,
     size_t blockSize = 256>
 class BucketsTableGpu {
@@ -96,11 +92,10 @@ class BucketsTableGpu {
         bitsPerTag <= 8 * sizeof(T),
         "The tag cannot be larger than the size of the type"
     );
-    static_assert(
-        powerOfTwo(numBuckets),
-        "Number of buckets must be a power of 2"
-    );
+
     static_assert(bucketSize > 0, "Bucket size must be greater than 0");
+
+    size_t numBuckets;
 
    public:
     using TagType = typename std::conditional<
@@ -115,12 +110,26 @@ class BucketsTableGpu {
     struct __align__(alignof(TagType)) Bucket {
         TagType tags[bucketSize];
 
-        __device__ int findEmptySlot() const {
+        template <typename H>
+        static __host__ __device__ uint32_t hash(const H& key) {
+            auto bytes = reinterpret_cast<const cuda::std::byte*>(&key);
+            cuco::murmurhash3_32<H> hasher;
+            return hasher.compute_hash(bytes, sizeof(H));
+        }
+
+        __device__ int findEmptySlot(TagType tag) const {
+            uint32_t idx = tag & (bucketSize - 1);
             for (size_t i = 0; i < bucketSize; ++i) {
-                if (tags[i] == EMPTY) {
-                    return static_cast<int>(i);
+                if (tags[idx] == EMPTY) {
+                    return static_cast<int>(idx);
                 }
+                idx = (idx + 1) & (bucketSize - 1);
             }
+            // for (size_t i = 0; i < bucketSize; ++i) {
+            //     if (tags[i] == EMPTY) {
+            //         return static_cast<int>(i);
+            //     }
+            // }
             return -1;
         }
 
@@ -175,7 +184,7 @@ class BucketsTableGpu {
     }
 
     static __host__ __device__ cuda::std::tuple<size_t, size_t, TagType>
-    getCandidateBuckets(const T& key) {
+    getCandidateBuckets(const T& key, size_t numBuckets) {
         TagType fp = fingerprint(key);
         size_t i1 = hash(key) & (numBuckets - 1);
         size_t i2 = i1 ^ (hash(fp) & (numBuckets - 1));
@@ -183,12 +192,12 @@ class BucketsTableGpu {
     }
 
     static __host__ __device__ size_t
-    getAlternateBucket(size_t bucket, TagType fp) {
+    getAlternateBucket(size_t bucket, TagType fp, size_t numBuckets) {
         return bucket ^ (hash(fp) & (numBuckets - 1));
     }
 
    public:
-    explicit BucketsTableGpu() {
+    explicit BucketsTableGpu(size_t numBuckets) : numBuckets(numBuckets) {
         CUDA_CALL(cudaMalloc(&d_buckets, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMalloc(&d_locks, numBuckets * sizeof(SpinLock)));
         CUDA_CALL(
@@ -196,9 +205,14 @@ class BucketsTableGpu {
         );
         CUDA_CALL(cudaMalloc(&d_rand_states, numBuckets * sizeof(curandState)));
 
+        assert(
+            powerOfTwo(numBuckets) && "Number of buckets must be a power of 2"
+        );
+
         size_t numBlocks = (numBuckets + blockSize - 1) / blockSize;
-        initRandStatesKernel<numBuckets>
-            <<<numBlocks, blockSize>>>(d_rand_states, time(nullptr));
+        initRandStatesKernel<<<numBlocks, blockSize>>>(
+            d_rand_states, time(nullptr), numBuckets
+        );
         CUDA_CALL(cudaDeviceSynchronize());
 
         clear();
@@ -363,11 +377,12 @@ class BucketsTableGpu {
         SpinLock* d_locks;
         curandState* d_rand_states;
         size_t* d_numOccupied;
+        size_t& numBuckets;
 
         __device__ bool tryInsertAtBucket(size_t bucketIdx, TagType tag) {
             d_locks[bucketIdx].lock();
 
-            int slot = d_buckets[bucketIdx].findEmptySlot();
+            int slot = d_buckets[bucketIdx].findEmptySlot(tag);
             if (slot != -1) {
                 d_buckets[bucketIdx].insertAt(slot, tag);
                 atomicAdd(
@@ -416,7 +431,8 @@ class BucketsTableGpu {
         }
 
         __device__ bool insert(const T& key) {
-            auto [i1, i2, fp] = BucketsTableGpu::getCandidateBuckets(key);
+            auto [i1, i2, fp] =
+                BucketsTableGpu::getCandidateBuckets(key, numBuckets);
 
             if (tryInsertAtBucket(i1, fp) || tryInsertAtBucket(i2, fp)) {
                 return true;
@@ -426,14 +442,19 @@ class BucketsTableGpu {
         }
 
         __device__ bool contains(const T& key) const {
-            auto [i1, i2, fp] = BucketsTableGpu::getCandidateBuckets(key);
+            auto [i1, i2, fp] =
+                BucketsTableGpu::getCandidateBuckets(key, numBuckets);
             return d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp);
         }
     };
 
     DeviceTableView get_device_view() {
         return DeviceTableView{
-            d_buckets, d_locks, d_rand_states, d_numOccupied
+            d_buckets,
+            d_locks,
+            d_rand_states,
+            d_numOccupied,
+            numBuckets,
         };
     }
 };
@@ -452,7 +473,6 @@ __global__ void insertKernel(
         T,
         bitsPerTag,
         bucketSize,
-        numBuckets,
         maxEvictions,
         blockSize>::DeviceTableView table_view
 ) {
@@ -484,7 +504,6 @@ __global__ void containsKernel(
         T,
         bitsPerTag,
         bucketSize,
-        numBuckets,
         maxEvictions,
         blockSize>::DeviceTableView table_view
 ) {

@@ -11,7 +11,6 @@ template <
     typename T,
     size_t bitsPerTag,
     size_t bucketSize = 4,
-    size_t numBuckets = 256,
     size_t maxProbes = 500>
 class BucketsTableCpu {
     static_assert(bitsPerTag <= 32, "The tag cannot be larger than 32 bits");
@@ -19,10 +18,6 @@ class BucketsTableCpu {
     static_assert(
         bitsPerTag <= 8 * sizeof(T),
         "The tag cannot be larger than the size of the type"
-    );
-    static_assert(
-        powerOfTwo(numBuckets),
-        "Number of buckets must be a power of 2"
     );
     static_assert(bucketSize > 0, "Bucket size must be greater than 0");
 
@@ -78,6 +73,7 @@ class BucketsTableCpu {
     std::vector<Bucket> buckets;
     std::atomic<size_t> numOccupied = 0;
     std::mt19937 rng;
+    size_t numBuckets;
 
     template <typename H>
     static __host__ __device__ uint32_t hash(const H& key) {
@@ -93,9 +89,7 @@ class BucketsTableCpu {
         return fp == 0 ? 1 : fp;
     }
 
-    static std::tuple<size_t, size_t, size_t> getCandidateBuckets(
-        const T& key
-    ) {
+    std::tuple<size_t, size_t, size_t> getCandidateBuckets(const T& key) {
         TagType fp = fingerprint(key);
         size_t h1 = hash(key) & (numBuckets - 1);
         size_t h2 = h1 ^ (hash(fp) & (numBuckets - 1));
@@ -139,15 +133,14 @@ class BucketsTableCpu {
     }
 
    public:
-    explicit BucketsTableCpu()
-        : buckets(numBuckets), rng(std::random_device{}()) {
+    explicit BucketsTableCpu(size_t numBuckets)
+        : buckets(numBuckets),
+          rng(std::random_device{}()),
+          numBuckets(numBuckets) {
+        assert(
+            powerOfTwo(numBuckets) && "Number of buckets must be a power of 2"
+        );
         std::memset(buckets.data(), 0, sizeof(Bucket) * numBuckets);
-    }
-
-    explicit BucketsTableCpu(const std::vector<T>& items) : BucketsTableCpu() {
-        for (const auto& item : items) {
-            insert(item);
-        }
     }
 
     bool insert(const T& key) {

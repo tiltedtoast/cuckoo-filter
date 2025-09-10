@@ -9,32 +9,21 @@
 #include <vector>
 #include "common.cuh"
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t numSlots,
-    size_t maxProbes,
-    size_t blockSize>
+template <typename T, size_t bitsPerTag, size_t maxProbes, size_t blockSize>
 class NaiveTable;
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t numSlots,
-    size_t maxProbes,
-    size_t blockSize>
+template <typename T, size_t bitsPerTag, size_t maxProbes, size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, numSlots, maxProbes, blockSize>::
-        DeviceTableView table_view
+    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
+        table_view
 );
 
 template <
     typename T,
     size_t bitsPerTag,
-    size_t numSlots = 256,
     size_t maxProbes = 500,
     size_t blockSize = 256>
 class NaiveTable {
@@ -44,7 +33,6 @@ class NaiveTable {
         bitsPerTag <= 8 * sizeof(T),
         "The tag cannot be larger than the size of the type"
     );
-    static_assert(powerOfTwo(numSlots), "Number of slots must be a power of 2");
 
     using TagType = typename std::conditional<
         bitsPerTag <= 8,
@@ -58,6 +46,7 @@ class NaiveTable {
     TagType* h_slots;
     TagType* d_slots;
     std::atomic<size_t> numOccupied{0};
+    size_t numSlots;
 
     template <typename H>
     static __host__ __device__ uint32_t hash(const H& key) {
@@ -74,7 +63,7 @@ class NaiveTable {
     }
 
     static __host__ __device__ cuda::std::tuple<size_t, size_t, TagType>
-    getCandidateSlots(const T& key) {
+    getCandidateSlots(const T& key, size_t& numSlots) {
         TagType fp = fingerprint(key);
         size_t h1 = hash(key) & (numSlots - 1);
         size_t h2 = h1 ^ (hash(fp) & (numSlots - 1));
@@ -114,13 +103,15 @@ class NaiveTable {
     }
 
    public:
-    explicit NaiveTable() {
+    explicit NaiveTable(size_t numSlots) : numSlots(numSlots) {
         CUDA_CALL(cudaMallocHost(&h_slots, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMemset(h_slots, 0, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMalloc(&d_slots, numSlots * sizeof(TagType)));
         CUDA_CALL(cudaMemcpy(
             d_slots, h_slots, numSlots * sizeof(TagType), cudaMemcpyHostToDevice
         ));
+
+        assert(powerOfTwo(numSlots) && "Number of slots must be a power of 2");
     }
 
     NaiveTable(T* items, size_t n) : NaiveTable(numSlots) {
@@ -136,7 +127,7 @@ class NaiveTable {
     }
 
     __host__ bool insert(const T& key) {
-        auto [h1, h2, fp] = getCandidateSlots(key);
+        auto [h1, h2, fp] = getCandidateSlots(key, numSlots);
 
         if (tryInsertAtSlot(h1, fp) || tryInsertAtSlot(h2, fp)) {
             return true;
@@ -146,7 +137,7 @@ class NaiveTable {
     }
 
     __host__ bool contains(const T& key) const {
-        auto [h1, h2, fp] = getCandidateSlots(key);
+        auto [h1, h2, fp] = getCandidateSlots(key, numSlots);
         return (h_slots[h1] == fp) || (h_slots[h2] == fp);
     }
 
@@ -185,7 +176,7 @@ class NaiveTable {
     }
 
     __host__ bool remove(const T& key) {
-        auto [h1, h2, fp] = getCandidateSlots(key);
+        auto [h1, h2, fp] = getCandidateSlots(key, numSlots);
 
         if (h_slots[h1] == fp) {
             h_slots[h1] = EMPTY;
@@ -220,15 +211,16 @@ class NaiveTable {
 
     struct DeviceTableView {
         TagType* d_slots;
+        size_t& numSlots;
 
         __device__ bool contains(const T& key) const {
-            auto [h1, h2, fp] = NaiveTable::getCandidateSlots(key);
+            auto [h1, h2, fp] = NaiveTable::getCandidateSlots(key, numSlots);
             return (d_slots[h1] == fp) || (d_slots[h2] == fp);
         }
     };
 
     __host__ DeviceTableView get_device_view() {
-        return DeviceTableView{d_slots};
+        return DeviceTableView{d_slots, numSlots};
     }
 
     ~NaiveTable() {
@@ -241,18 +233,13 @@ class NaiveTable {
     }
 };
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t numSlots,
-    size_t maxProbes,
-    size_t blockSize>
+template <typename T, size_t bitsPerTag, size_t maxProbes, size_t blockSize>
 __global__ void containsKernel(
     const T* keys,
     bool* output,
     size_t n,
-    typename NaiveTable<T, bitsPerTag, numSlots, maxProbes, blockSize>::
-        DeviceTableView table_view
+    typename NaiveTable<T, bitsPerTag, maxProbes, blockSize>::DeviceTableView
+        table_view
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {

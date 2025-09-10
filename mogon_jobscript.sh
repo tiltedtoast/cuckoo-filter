@@ -1,5 +1,6 @@
 #!/bin/bash
 
+#SBATCH -M mogonki
 #SBATCH -J Cuckoo-Filter    # Job name
 #SBATCH -o \%x_\%j.out      # Specify stdout output file where \%j expands to jobID and \%x to JobName
 #SBATCH -A ki-acccomp       # Account name
