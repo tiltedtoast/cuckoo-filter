@@ -1,5 +1,6 @@
 #pragma once
 
+#include <__clang_cuda_runtime_wrapper.h>
 #include <cstdint>
 #include <ctime>
 #include <cuco/hash_functions.cuh>
@@ -98,10 +99,10 @@ class BucketsTableGpu {
     struct __align__(alignof(TagType)) Bucket {
         TagType tags[bucketSize];
 
-        __device__ int findEmptySlot(TagType tag) const {
+        __forceinline__ __device__ int findSlot(TagType tag, TagType target) {
             uint32_t idx = tag & (bucketSize - 1);
             for (size_t i = 0; i < bucketSize; ++i) {
-                if (tags[idx] == EMPTY) {
+                if (tags[idx] == target) {
                     return static_cast<int>(idx);
                 }
                 idx = (idx + 1) & (bucketSize - 1);
@@ -109,13 +110,12 @@ class BucketsTableGpu {
             return -1;
         }
 
+        __device__ int findEmptySlot(TagType tag) const {
+            return findSlot(tag, EMPTY);
+        }
+
         __device__ bool contains(TagType tag) const {
-            for (size_t i = 0; i < bucketSize; ++i) {
-                if (tags[i] == tag) {
-                    return true;
-                }
-            }
-            return false;
+            return findSlot(tag, tag) != -1;
         }
 
         __device__ void insertAt(size_t slot, TagType tag) {
@@ -123,11 +123,10 @@ class BucketsTableGpu {
         }
 
         __device__ bool remove(TagType tag) {
-            for (size_t i = 0; i < bucketSize; ++i) {
-                if (tags[i] == tag) {
-                    tags[i] = EMPTY;
-                    return true;
-                }
+            size_t idx = findSlot(tag, tag);
+            if (idx != -1) {
+                tags[idx] = EMPTY;
+                return true;
             }
             return false;
         }
