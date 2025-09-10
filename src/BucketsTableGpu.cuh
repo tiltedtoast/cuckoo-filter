@@ -263,7 +263,6 @@ class BucketsTableGpu {
                     T,
                     bitsPerTag,
                     bucketSize,
-                    numBuckets,
                     maxEvictions,
                     blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset, currentChunkSize, get_device_view()
@@ -321,7 +320,6 @@ class BucketsTableGpu {
                     T,
                     bitsPerTag,
                     bucketSize,
-                    numBuckets,
                     maxEvictions,
                     blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset,
