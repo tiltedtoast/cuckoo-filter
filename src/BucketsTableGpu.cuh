@@ -259,14 +259,10 @@ class BucketsTableGpu {
                 ));
 
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                insertKernel<
-                    T,
-                    bitsPerTag,
-                    bucketSize,
-                    maxEvictions,
-                    blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
-                    d_keys + offset, currentChunkSize, get_device_view()
-                );
+                insertKernel<T, bitsPerTag, bucketSize, maxEvictions, blockSize>
+                    <<<numBlocks, blockSize, 0, streams[i]>>>(
+                        d_keys + offset, currentChunkSize, get_device_view()
+                    );
             }
         }
 
@@ -422,7 +418,7 @@ class BucketsTableGpu {
 
                 currentFp = evictedFp;
                 currentBucket = BucketsTableGpu::getAlternateBucket(
-                    currentBucket, evictedFp
+                    currentBucket, evictedFp, numBuckets
                 );
             }
             return false;
