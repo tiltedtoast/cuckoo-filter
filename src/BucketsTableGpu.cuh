@@ -187,6 +187,7 @@ class BucketsTableGpu {
         return bucket ^ (hash(fp) & (numBuckets - 1));
     }
 
+   public:
     explicit BucketsTableGpu() {
         CUDA_CALL(cudaMalloc(&d_buckets, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMalloc(&d_locks, numBuckets * sizeof(SpinLock)));
@@ -461,7 +462,14 @@ __global__ void insertKernel(
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        table_view.insert(keys[idx]);
+        for (int i = 0; i < 3; ++i) {
+            if (table_view.insert(keys[idx])) {
+                return;
+            }
+        }
+        // We kind of have a big problem at this point, since it means our item
+        // has been evicted and reinserted multiple times. May as well buy a
+        // lottery ticket I suppose.
     }
 }
 
