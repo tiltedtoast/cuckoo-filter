@@ -80,9 +80,10 @@ int main(int argc, char** argv) {
         auto table = BucketsTableCpu<uint32_t, 32, 32, 1000>(n / 16);
 
         auto start = std::chrono::high_resolution_clock::now();
+        size_t count = 0;
 
         for (size_t i = 0; i < n; ++i) {
-            table.insert(input[i]);
+            count += size_t(table.insert(input[i]));
         }
         auto mask = table.containsMany(input, n);
         auto end = std::chrono::high_resolution_clock::now();
