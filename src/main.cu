@@ -33,7 +33,7 @@ int main() {
         input[i] = dis(gen);
     }
 
-    auto naive_table = NaiveTable<uint32_t, 32, n, 1000>();
+    auto naive_table = NaiveTable<uint32_t, 32, n * 2, 1000>();
     auto start = std::chrono::high_resolution_clock::now();
 
     size_t naive_count = 0;

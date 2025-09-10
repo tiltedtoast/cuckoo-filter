@@ -418,10 +418,6 @@ class BucketsTableGpu {
         __device__ bool insert(const T& key) {
             auto [i1, i2, fp] = BucketsTableGpu::getCandidateBuckets(key);
 
-            if (d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp)) {
-                return true;
-            }
-
             if (tryInsertAtBucket(i1, fp) || tryInsertAtBucket(i2, fp)) {
                 return true;
             }
