@@ -1,6 +1,5 @@
 #pragma once
 
-#include <__clang_cuda_runtime_wrapper.h>
 #include <cstdint>
 #include <ctime>
 #include <cuco/hash_functions.cuh>
@@ -110,11 +109,11 @@ class BucketsTableGpu {
             return -1;
         }
 
-        __device__ int findEmptySlot(TagType tag) const {
+        __device__ int findEmptySlot(TagType tag) {
             return findSlot(tag, EMPTY);
         }
 
-        __device__ bool contains(TagType tag) const {
+        __device__ bool contains(TagType tag) {
             return findSlot(tag, tag) != -1;
         }
 
