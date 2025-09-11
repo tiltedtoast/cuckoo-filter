@@ -4,12 +4,12 @@
 #SBATCH -J Cuckoo-Filter    # Job name
 #SBATCH -o \%x_\%j.out      # Specify stdout output file where \%j expands to jobID and \%x to JobName
 #SBATCH -A ki-acccomp       # Account name
-#SBATCH -p a40              # Queue name
+#SBATCH -p a100ai           # Queue name
 #SBATCH -n 1                # Number of tasks
 #SBATCH -c 8                # Number of CPUs
 #SBATCH --gres=gpu:1        # Total number of GPUs
-#SBATCH --mem=10G           # Memory per node
-#SBATCH -t 3                # Time in minutes
+#SBATCH --mem=64G           # Memory per node
+#SBATCH -t 360              # Time in minutes
 
 set -e
 
@@ -22,4 +22,4 @@ module load system/CUDA
 srun meson setup build
 srun ninja -C build
 
-srun ./build/cuckoo-filter-cuda-benchmark benchmark_results.csv
+srun ./build/benchmark_bucket_size

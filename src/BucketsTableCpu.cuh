@@ -159,7 +159,7 @@ class BucketsTableCpu {
         return buckets[h1].contains(fp) || buckets[h2].contains(fp);
     }
 
-    const bool* containsMany(const T* keys, const size_t n) {
+    bool* containsMany(const T* keys, const size_t n) {
         bool* output = static_cast<bool*>(std::malloc(n * sizeof(bool)));
         for (size_t i = 0; i < n; ++i) {
             output[i] = contains(keys[i]);

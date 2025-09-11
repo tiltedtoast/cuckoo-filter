@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
 #include <iostream>
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
     size_t n = 1ULL << n_exponent;
 
     uint32_t* input;
-    std::mt19937 rng;
+    std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint32_t> dist(1, UINT32_MAX);
 
     CUDA_CALL(cudaMallocHost(&input, sizeof(uint32_t) * n));

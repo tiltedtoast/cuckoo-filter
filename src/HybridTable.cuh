@@ -114,12 +114,6 @@ class HybridTable {
         assert(powerOfTwo(numSlots) && "Number of slots must be a power of 2");
     }
 
-    HybridTable(T* items, size_t n) : HybridTable(numSlots) {
-        for (size_t i = 0; i < n; ++i) {
-            insert(items[i]);
-        }
-    }
-
     __host__ void syncToDevice() {
         CUDA_CALL(cudaMemcpy(
             d_slots, h_slots, numSlots * sizeof(TagType), cudaMemcpyHostToDevice

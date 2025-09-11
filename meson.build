@@ -47,8 +47,17 @@ executable(
 )
 
 executable(
-    'cuckoo-filter-cuda-benchmark',
+    'benchmark_perf',
     './src/benchmark.cu',
+    dependencies: dependencies,
+    include_directories: includes,
+    cuda_args: cuda_args,
+    install: true,
+)
+
+executable(
+    'benchmark_bucket_size',
+    './src/benchmark_buckets.cu',
     dependencies: dependencies,
     include_directories: includes,
     cuda_args: cuda_args,
