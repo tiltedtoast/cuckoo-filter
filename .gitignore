@@ -10,3 +10,9 @@ build
 *.sqlite
 *.html
 .~lock.HPC_Presentation.odp#
+.spack-env
+spack*
+nohup.out
+benchmark_results.csv
+benchmark_results.txt
+benchmark_results_new.csv
