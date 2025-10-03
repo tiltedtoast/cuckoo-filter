@@ -78,6 +78,84 @@ class BucketsTableGpu {
         typename std::conditional<bitsPerTag <= 16, uint16_t, uint32_t>::type>::
         type;
 
+    struct PackedTag {
+        static_assert(
+            sizeof(TagType) * 8 <= 64,
+            "TagType must not be larger than 64 bits"
+        );
+
+        TagType value;
+
+        // Lower bits = fingerprint
+        // Next bit = bucket type where key lives (1 for primary, 0 secondary)
+        // Upper bits = bucket index where key lives
+        static constexpr size_t fpBits = bitsPerTag;
+        static constexpr size_t totalBits = sizeof(TagType) * 8;
+        static constexpr size_t bucketIdxBits = totalBits - fpBits - 1;
+        static_assert(
+            fpBits < totalBits - 1,
+            "fpBits must leave at least 1 bit for bucketType and 1 "
+            "for bucketIdx"
+        );
+
+        static constexpr TagType fpMask = TagType((1ULL << fpBits) - 1ULL);
+
+        static constexpr TagType bucketTypeMask = TagType(1ULL << fpBits);
+
+        static constexpr TagType bucketIdxMask =
+            TagType(((1ULL << bucketIdxBits) - 1ULL) << (fpBits + 1));
+
+        __host__ __device__
+        PackedTag(TagType fp, uint64_t bucketIdx, bool isPrimary)
+            : value(0) {
+            setFingerprint(fp);
+            setBucketIdx(bucketIdx);
+            setBucketType(isPrimary);
+        }
+
+        __host__ __device__ TagType getFingerprint() const {
+            return value & fpMask;
+        }
+
+        __host__ __device__ uint64_t getBucketIndex() const {
+            return uint64_t((value & bucketIdxMask) >> (fpBits + 1));
+        }
+
+        __host__ __device__ bool isPrimary() const {
+            return (value & bucketTypeMask) != 0;
+        }
+
+        __host__ __device__ bool isSecondary() const {
+            return !isPrimary();
+        }
+
+        __host__ __device__ void setFingerprint(TagType fp) {
+            value = (value & ~fpMask) | (fp & fpMask);
+        }
+
+        __host__ __device__ void setBucketIdx(size_t bucketIdx) {
+            TagType v = TagType(bucketIdx) << (fpBits + 1);
+
+            value = (value & ~bucketIdxMask) | v;
+        }
+
+        __host__ __device__ void setBucketType(bool primary) {
+            if (primary) {
+                value |= bucketTypeMask;
+            } else {
+                value &= ~bucketTypeMask;
+            }
+        }
+
+        __host__ __device__ void setPrimary() {
+            setBucketType(true);
+        }
+
+        __host__ __device__ void setSecondary() {
+            setBucketType(false);
+        }
+    };
+
     static constexpr TagType EMPTY = 0;
     static constexpr size_t tagMask = (1ULL << bitsPerTag) - 1;
 
