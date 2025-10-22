@@ -180,12 +180,22 @@ class BucketsTableGpu {
 
         __device__ bool tryInsertAt(size_t slot, TagType tag) {
             TagType expected = EMPTY;
-            return tags[slot].compare_exchange_strong(expected, tag);
+            return tags[slot].compare_exchange_strong(
+                expected,
+                tag,
+                cuda::memory_order_relaxed,
+                cuda::memory_order_relaxed
+            );
         }
 
         __device__ bool tryRemoveAt(size_t slot, TagType tag) {
             TagType expected = tag;
-            return tags[slot].compare_exchange_strong(expected, EMPTY);
+            return tags[slot].compare_exchange_strong(
+                expected,
+                EMPTY,
+                cuda::memory_order_relaxed,
+                cuda::memory_order_relaxed
+            );
         }
 
         __device__ TagType getTagAt(size_t slot) const {
@@ -385,7 +395,7 @@ class BucketsTableGpu {
             uint32_t idx = tag & (bucketSize - 1);
             for (size_t i = 0; i < bucketSize; ++i) {
                 if (d_buckets[bucketIdx].tryRemoveAt(idx, tag)) {
-                    d_numOccupied->fetch_sub(1);
+                    d_numOccupied->fetch_sub(1, cuda::memory_order_relaxed);
                     return true;
                 }
                 idx = (idx + 1) & (bucketSize - 1);
@@ -397,7 +407,6 @@ class BucketsTableGpu {
             uint32_t idx = tag & (bucketSize - 1);
             for (size_t i = 0; i < bucketSize; ++i) {
                 if (d_buckets[bucketIdx].tryInsertAt(idx, tag)) {
-                    d_numOccupied->fetch_add(1);
                     return true;
                 }
                 idx = (idx + 1) & (bucketSize - 1);
@@ -418,7 +427,7 @@ class BucketsTableGpu {
 
                 TagType evictedFp =
                     d_buckets[currentBucket].tags[evictSlot].exchange(
-                        currentFp
+                        currentFp, cuda::memory_order_relaxed
                     );
 
                 currentFp = evictedFp;
@@ -462,9 +471,26 @@ __global__ void insertKernel(
     size_t n,
     typename BucketsTableGpu<Config>::DeviceTableView tableView
 ) {
+    __shared__ int blockSuccessCount;
+
+    if (threadIdx.x == 0) {
+        blockSuccessCount = 0;
+    }
+    __syncthreads();
+
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        tableView.insert(keys[idx]);
+        bool success = tableView.insert(keys[idx]);
+        if (success) {
+            atomicAdd(&blockSuccessCount, 1);
+        }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0 && blockSuccessCount > 0) {
+        tableView.d_numOccupied->fetch_add(
+            blockSuccessCount, cuda::memory_order_relaxed
+        );
     }
 }
 
