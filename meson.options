@@ -1,0 +1,13 @@
+option(
+    'BUILD_BENCHMARKS',
+    type: 'boolean',
+    value: true,
+    description: 'Build benchmarks for the library',
+)
+
+option(
+    'BUILD_TESTS',
+    type: 'boolean',
+    value: true,
+    description: 'Build tests for the library',
+)

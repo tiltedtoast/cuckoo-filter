@@ -44,3 +44,33 @@ executable(
     cuda_args: cuda_args,
     install: true,
 )
+
+if get_option('BUILD_BENCHMARKS') == true
+    benchmark_dep = dependency('benchmark', required: true)
+    benchmark_main_dep = dependency('benchmark_main', required: true)
+
+    executable(
+        'benchmark-cuckoo-vs-cuco',
+        './benchmark/cuckoo_vs_bloom.cu',
+        dependencies: [benchmark_dep, benchmark_main_dep, cuco_dep],
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
+endif
+
+if get_option('BUILD_TESTS') == true
+    gtest_dep = dependency('gtest', required: true)
+    gtest_main_dep = dependency('gtest_main', required: true)
+
+    test_exe = executable(
+        'test-cuckoo-filter',
+        './tests/test_cuckoo_filter.cu',
+        dependencies: [gtest_dep, gtest_main_dep, cuco_dep],
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
+
+    test('cuckoo-filter-tests', test_exe)
+endif

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <cuco/hash_functions.cuh>
@@ -12,54 +13,54 @@
 
 template <
     typename T,
-    size_t bitsPerTag,
-    size_t bucketSize,
-    size_t maxEvictions,
-    size_t blockSize>
+    size_t bitsPerTag_,
+    size_t maxEvictions_,
+    size_t blockSize_,
+    size_t maxBucketBytes_>
+struct CuckooConfig {
+    using KeyType = T;
+    static constexpr size_t bitsPerTag = bitsPerTag_;
+    static constexpr size_t maxEvictions = maxEvictions_;
+    static constexpr size_t blockSize = blockSize_;
+    static constexpr size_t maxBucketBytes = maxBucketBytes_;
+};
+
+template <typename Config>
 class BucketsTableGpu;
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t bucketSize,
-    size_t maxEvictions,
-    size_t blockSize>
+template <typename Config>
 __global__ void insertKernel(
-    const T* keys,
+    const typename Config::KeyType* keys,
     size_t n,
-    typename BucketsTableGpu<
-        T,
-        bitsPerTag,
-        bucketSize,
-        maxEvictions,
-        blockSize>::DeviceTableView tableView
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
 );
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t bucketSize,
-    size_t maxEvictions,
-    size_t blockSize>
+template <typename Config>
 __global__ void containsKernel(
-    const T* keys,
+    const typename Config::KeyType* keys,
     bool* output,
     size_t n,
-    typename BucketsTableGpu<
-        T,
-        bitsPerTag,
-        bucketSize,
-        maxEvictions,
-        blockSize>::DeviceTableView tableView
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
 );
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t bucketSize = 32,
-    size_t maxEvictions = 500,
-    size_t blockSize = 256>
+template <typename Config>
 class BucketsTableGpu {
+    using T = typename Config::KeyType;
+    static constexpr size_t bitsPerTag = Config::bitsPerTag;
+
+    using TagType = typename std::conditional<
+        bitsPerTag <= 8,
+        uint8_t,
+        typename std::conditional<bitsPerTag <= 16, uint16_t, uint32_t>::type>::
+        type;
+
+    static constexpr size_t tagEntryBytes = sizeof(TagType);
+
+    static constexpr size_t maxEntriesByBytes =
+        (Config::maxBucketBytes) / tagEntryBytes;
+
+    static constexpr size_t maxEvictions = Config::maxEvictions;
+    static constexpr size_t blockSize = Config::blockSize;
     static_assert(bitsPerTag <= 32, "The tag cannot be larger than 32 bits");
     static_assert(bitsPerTag >= 1, "The tag must be at least 1 bit");
     static_assert(
@@ -67,16 +68,16 @@ class BucketsTableGpu {
         "The tag cannot be larger than the size of the type"
     );
 
-    static_assert(bucketSize > 0, "Bucket size must be greater than 0");
-
-    size_t numBuckets;
-
    public:
-    using TagType = typename std::conditional<
-        bitsPerTag <= 8,
-        uint8_t,
-        typename std::conditional<bitsPerTag <= 16, uint16_t, uint32_t>::type>::
-        type;
+    static constexpr size_t bucketSize = []() constexpr {
+        size_t v = 1;
+        while ((v << 1) <= maxEntriesByBytes) {
+            v <<= 1;
+        }
+        return v;
+    }();
+
+    static_assert(bucketSize > 0, "Bucket size must be greater than 0");
 
     struct PackedTag {
         static_assert(
@@ -159,7 +160,7 @@ class BucketsTableGpu {
     static constexpr TagType EMPTY = 0;
     static constexpr size_t tagMask = (1ULL << bitsPerTag) - 1;
 
-    struct __align__(alignof(TagType)) Bucket {
+    struct __align__(128) Bucket {
         cuda::std::atomic<TagType> tags[bucketSize];
 
         __forceinline__ __device__ int findSlot(TagType tag, TagType target) {
@@ -193,6 +194,7 @@ class BucketsTableGpu {
     };
 
    private:
+    size_t numBuckets;
     Bucket* d_buckets;
     cuda::std::atomic<size_t>* d_numOccupied{};
     size_t h_numOccupied = 0;
@@ -223,6 +225,9 @@ class BucketsTableGpu {
     }
 
    public:
+    BucketsTableGpu(const BucketsTableGpu&) = delete;
+    BucketsTableGpu& operator=(const BucketsTableGpu&) = delete;
+
     explicit BucketsTableGpu(size_t numBuckets) : numBuckets(numBuckets) {
         CUDA_CALL(cudaMalloc(&d_buckets, numBuckets * sizeof(Bucket)));
         CUDA_CALL(
@@ -249,7 +254,9 @@ class BucketsTableGpu {
         T* d_keys;
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
 
-        constexpr size_t numStreams = 12;
+        const size_t numStreams =
+            std::clamp(n / blockSize, size_t(1), size_t(12));
+
         const size_t chunkSize = SDIV(n, numStreams);
         cudaStream_t streams[numStreams];
 
@@ -271,10 +278,9 @@ class BucketsTableGpu {
                 ));
 
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                insertKernel<T, bitsPerTag, bucketSize, maxEvictions, blockSize>
-                    <<<numBlocks, blockSize, 0, streams[i]>>>(
-                        d_keys + offset, currentChunkSize, get_device_view()
-                    );
+                insertKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
+                    d_keys + offset, currentChunkSize, get_device_view()
+                );
             }
         }
 
@@ -302,7 +308,8 @@ class BucketsTableGpu {
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
         CUDA_CALL(cudaMalloc(&d_output, n * sizeof(bool)));
 
-        constexpr size_t numStreams = 12;
+        const size_t numStreams =
+            std::clamp(n / blockSize, size_t(1), size_t(12));
         const size_t chunkSize = SDIV(n, numStreams);
         cudaStream_t streams[numStreams];
 
@@ -324,12 +331,7 @@ class BucketsTableGpu {
                 ));
 
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                containsKernel<
-                    T,
-                    bitsPerTag,
-                    bucketSize,
-                    maxEvictions,
-                    blockSize><<<numBlocks, blockSize, 0, streams[i]>>>(
+                containsKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset,
                     d_output + offset,
                     currentChunkSize,
@@ -374,14 +376,10 @@ class BucketsTableGpu {
         return static_cast<float>(h_numOccupied) / (numBuckets * bucketSize);
     }
 
-    [[nodiscard]] double expectedFalsePositiveRate() const {
-        return (2.0 * bucketSize) / (1ULL << bitsPerTag);
-    }
-
     struct DeviceTableView {
         Bucket* d_buckets;
         cuda::std::atomic<size_t>* d_numOccupied;
-        size_t& numBuckets;
+        size_t numBuckets;
 
         __device__ bool tryRemoveAtBucket(size_t bucketIdx, TagType tag) {
             uint32_t idx = tag & (bucketSize - 1);
@@ -458,21 +456,11 @@ class BucketsTableGpu {
     }
 };
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t bucketSize,
-    size_t maxEvictions,
-    size_t blockSize>
+template <typename Config>
 __global__ void insertKernel(
-    const T* keys,
+    const typename Config::KeyType* keys,
     size_t n,
-    typename BucketsTableGpu<
-        T,
-        bitsPerTag,
-        bucketSize,
-        maxEvictions,
-        blockSize>::DeviceTableView tableView
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
@@ -480,22 +468,12 @@ __global__ void insertKernel(
     }
 }
 
-template <
-    typename T,
-    size_t bitsPerTag,
-    size_t bucketSize,
-    size_t maxEvictions,
-    size_t blockSize>
+template <typename Config>
 __global__ void containsKernel(
-    const T* keys,
+    const typename Config::KeyType* keys,
     bool* output,
     size_t n,
-    typename BucketsTableGpu<
-        T,
-        bitsPerTag,
-        bucketSize,
-        maxEvictions,
-        blockSize>::DeviceTableView tableView
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
 ) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {

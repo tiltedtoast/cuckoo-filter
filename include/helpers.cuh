@@ -8,7 +8,7 @@ constexpr bool powerOfTwo(size_t n) {
 }
 
 template <typename T>
-size_t count_ones(T* data, size_t n) {
+size_t countOnes(T* data, size_t n) {
     size_t count = 0;
     for (size_t i = 0; i < n; ++i) {
         if (data[i]) {

@@ -1,14 +1,12 @@
+#include <BucketsTableGpu.cuh>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
+#include <helpers.cuh>
 #include <iostream>
 #include <random>
-#include "BucketsTableGpu.cuh"
-#include "helpers.cuh"
-
-
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -34,7 +32,8 @@ int main(int argc, char** argv) {
 
     std::generate(input, input + n, [&]() { return dist(rng); });
 
-    auto table = BucketsTableGpu<uint32_t, 32, 32, 1000>(n / 32);
+    using Config = CuckooConfig<uint32_t, 32, 1000, 256, 128>;
+    auto table = BucketsTableGpu<Config>(n / 32);
 
     bool* output;
 
@@ -48,7 +47,7 @@ int main(int argc, char** argv) {
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
             .count();
 
-    size_t found = count_ones(output, n);
+    size_t found = countOnes(output, n);
     std::cout << "Inserted " << count << " / " << n << " items, found " << found
               << " items in " << duration << " ms" << std::endl;
 }
