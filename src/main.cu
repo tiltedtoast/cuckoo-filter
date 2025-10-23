@@ -8,6 +8,8 @@
 #include <iostream>
 #include <random>
 
+constexpr double TARGET_LOAD_FACTOR = 0.90;
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <table_type> " << std::endl;
@@ -32,8 +34,14 @@ int main(int argc, char** argv) {
 
     std::generate(input, input + n, [&]() { return dist(rng); });
 
-    using Config = CuckooConfig<uint32_t, 32, 1000, 256, 128>;
-    auto table = BucketsTableGpu<Config>(n / 32);
+    using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+    const size_t numBuckets = nextPowerOfTwo(
+        static_cast<size_t>(std::ceil(
+            static_cast<double>(n) /
+            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
+        ))
+    );
+    auto table = BucketsTableGpu<Config>(numBuckets);
 
     bool* output;
 
@@ -49,5 +57,6 @@ int main(int argc, char** argv) {
 
     size_t found = countOnes(output, n);
     std::cout << "Inserted " << count << " / " << n << " items, found " << found
-              << " items in " << duration << " ms" << std::endl;
+              << " items in " << duration << " ms"
+              << " (load factor = " << table.loadFactor() << ")" << std::endl;
 }

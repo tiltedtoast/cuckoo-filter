@@ -7,6 +7,21 @@ constexpr bool powerOfTwo(size_t n) {
     return n != 0 && (n & (n - 1)) == 0;
 }
 
+constexpr size_t nextPowerOfTwo(size_t n) {
+    if (powerOfTwo(n)) return n;
+
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n |= n >> 32;
+    n++;
+
+    return n;
+}
+
 template <typename T>
 size_t countOnes(T* data, size_t n) {
     size_t count = 0;

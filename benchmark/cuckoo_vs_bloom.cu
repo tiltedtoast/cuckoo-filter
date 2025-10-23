@@ -10,6 +10,26 @@
 
 namespace bm = benchmark;
 
+constexpr double TARGET_LOAD_FACTOR = 0.90;
+using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+
+template <typename Config>
+constexpr double cuckooBitsPerItem() {
+    using TagType = typename std::conditional<
+        Config::bitsPerTag <= 8,
+        uint8_t,
+        typename std::
+            conditional<Config::bitsPerTag <= 16, uint16_t, uint32_t>::type>::
+        type;
+
+    constexpr size_t bucketSize = BucketsTableGpu<Config>::bucketSize;
+    constexpr size_t bytesPerBucket = bucketSize * sizeof(TagType);
+    constexpr size_t bitsPerBucket = bytesPerBucket * 8;
+
+    return static_cast<double>(bitsPerBucket) /
+           (bucketSize * TARGET_LOAD_FACTOR);
+}
+
 template <typename T>
 std::vector<T> generateKeys(size_t n, unsigned seed = 42) {
     std::vector<T> keys(n);
@@ -29,9 +49,13 @@ size_t cucoNumBlocks(size_t n) {
 
 static void BM_CuckooFilter_Insert(bm::State& state) {
     const size_t n = state.range(0);
-    const size_t numBuckets = n / 32;
 
-    using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+    const size_t numBuckets = nextPowerOfTwo(
+        static_cast<size_t>(std::ceil(
+            static_cast<double>(n) /
+            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
+        ))
+    );
 
     auto keys = generateKeys<uint32_t>(n);
 
@@ -50,16 +74,18 @@ static void BM_CuckooFilter_Insert(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 static void BM_CuckooFilter_Query(bm::State& state) {
     const size_t n = state.range(0);
-    const size_t numBuckets = n / 32;
 
-    using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+    const size_t numBuckets = nextPowerOfTwo(
+        static_cast<size_t>(std::ceil(
+            static_cast<double>(n) /
+            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
+        ))
+    );
+
     BucketsTableGpu<Config> table(numBuckets);
 
     auto keys = generateKeys<uint32_t>(n);
@@ -75,15 +101,13 @@ static void BM_CuckooFilter_Query(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 static void BM_BloomFilter_Insert(bm::State& state) {
     const size_t n = state.range(0);
 
-    constexpr std::size_t bitsPerTag = 16;
+    constexpr auto bitsPerTag =
+        static_cast<size_t>(cuckooBitsPerItem<Config>());
 
     using BloomFilter = cuco::bloom_filter<uint32_t>;
 
@@ -105,15 +129,13 @@ static void BM_BloomFilter_Insert(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 static void BM_BloomFilter_Query(bm::State& state) {
     const size_t n = state.range(0);
 
-    constexpr std::size_t bitsPerTag = 16;
+    constexpr auto bitsPerTag =
+        static_cast<size_t>(cuckooBitsPerItem<Config>());
 
     using BloomFilter = cuco::bloom_filter<uint32_t>;
 
@@ -141,16 +163,17 @@ static void BM_BloomFilter_Query(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
     const size_t n = state.range(0);
-    const size_t numBuckets = n / 32;
 
-    using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+    const size_t numBuckets = nextPowerOfTwo(
+        static_cast<size_t>(std::ceil(
+            static_cast<double>(n) /
+            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
+        ))
+    );
 
     auto keys = generateKeys<uint32_t>(n);
     std::vector<uint8_t> output(n);
@@ -170,15 +193,13 @@ static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 static void BM_BloomFilter_InsertAndQuery(bm::State& state) {
     const size_t n = state.range(0);
 
-    constexpr std::size_t bitsPerTag = 16;
+    constexpr auto bitsPerTag =
+        static_cast<size_t>(cuckooBitsPerItem<Config>());
 
     using BloomFilter = cuco::bloom_filter<uint32_t>;
     const size_t numBlocks = cucoNumBlocks<BloomFilter, bitsPerTag>(n);
@@ -207,9 +228,6 @@ static void BM_BloomFilter_InsertAndQuery(bm::State& state) {
     }
 
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
-    state.SetBytesProcessed(
-        static_cast<int64_t>(state.iterations() * n * sizeof(uint32_t))
-    );
 }
 
 BENCHMARK(BM_CuckooFilter_Insert)
