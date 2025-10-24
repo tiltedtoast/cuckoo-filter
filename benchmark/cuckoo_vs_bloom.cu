@@ -50,13 +50,6 @@ size_t cucoNumBlocks(size_t n) {
 static void BM_CuckooFilter_Insert(bm::State& state) {
     const size_t n = state.range(0);
 
-    const size_t numBuckets = nextPowerOfTwo(
-        static_cast<size_t>(std::ceil(
-            static_cast<double>(n) /
-            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
-        ))
-    );
-
     auto keys = generateKeys<uint32_t>(n);
 
     for (auto _ : state) {
@@ -78,13 +71,6 @@ static void BM_CuckooFilter_Insert(bm::State& state) {
 
 static void BM_CuckooFilter_Query(bm::State& state) {
     const size_t n = state.range(0);
-
-    const size_t numBuckets = nextPowerOfTwo(
-        static_cast<size_t>(std::ceil(
-            static_cast<double>(n) /
-            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
-        ))
-    );
 
     BucketsTableGpu<Config> table(n, TARGET_LOAD_FACTOR);
 
@@ -167,13 +153,6 @@ static void BM_BloomFilter_Query(bm::State& state) {
 
 static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
     const size_t n = state.range(0);
-
-    const size_t numBuckets = nextPowerOfTwo(
-        static_cast<size_t>(std::ceil(
-            static_cast<double>(n) /
-            (BucketsTableGpu<Config>::bucketSize * TARGET_LOAD_FACTOR)
-        ))
-    );
 
     auto keys = generateKeys<uint32_t>(n);
     std::vector<uint8_t> output(n);

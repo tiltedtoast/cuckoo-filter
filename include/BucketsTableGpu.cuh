@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <ctime>
+#include <cub/cub.cuh>
 #include <cuco/hash_functions.cuh>
 #include <cuda/std/atomic>
 #include <cuda/std/cstddef>
@@ -40,6 +41,22 @@ __global__ void insertKernel(
 );
 
 template <typename Config>
+__global__ void insertKernelSorted(
+    const typename Config::KeyType* keys,
+    const typename BucketsTableGpu<Config>::PackedTagType* packedTags,
+    size_t n,
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
+);
+
+template <typename Config>
+__global__ void computePackedTagsKernel(
+    const typename Config::KeyType* keys,
+    typename BucketsTableGpu<Config>::PackedTagType* packedTags,
+    size_t n,
+    size_t numBuckets
+);
+
+template <typename Config>
 __global__ void containsKernel(
     const typename Config::KeyType* keys,
     bool* output,
@@ -49,6 +66,7 @@ __global__ void containsKernel(
 
 template <typename Config>
 class BucketsTableGpu {
+   public:
     using T = typename Config::KeyType;
     static constexpr size_t bitsPerTag = Config::bitsPerTag;
 
@@ -72,7 +90,6 @@ class BucketsTableGpu {
         "The tag cannot be larger than the size of the type"
     );
 
-   public:
     static constexpr size_t bucketSize = []() constexpr {
         size_t v = 1;
         while ((v << 1) <= maxEntriesByBytes) {
@@ -83,81 +100,53 @@ class BucketsTableGpu {
 
     static_assert(bucketSize > 0, "Bucket size must be greater than 0");
 
-    struct PackedTag {
-        static_assert(
-            sizeof(TagType) * 8 <= 64,
-            "TagType must not be larger than 64 bits"
-        );
+    using PackedTagType = uint64_t;
 
-        TagType value;
+    struct PackedTag {
+        PackedTagType value;
 
         // Lower bits = fingerprint
-        // Next bit = bucket type where key lives (1 for primary, 0 secondary)
-        // Upper bits = bucket index where key lives
+        // Upper bits = bucket index
         static constexpr size_t fpBits = bitsPerTag;
-        static constexpr size_t totalBits = sizeof(TagType) * 8;
-        static constexpr size_t bucketIdxBits = totalBits - fpBits - 1;
+        static constexpr size_t totalBits = sizeof(PackedTagType) * 8;
+        static constexpr size_t bucketIdxBits = totalBits - fpBits;
+
         static_assert(
-            fpBits < totalBits - 1,
-            "fpBits must leave at least 1 bit for bucketType and 1 "
-            "for bucketIdx"
+            fpBits < totalBits,
+            "fpBits must leave at least some bits for bucketIdx"
         );
 
-        static constexpr TagType fpMask = TagType((1ULL << fpBits) - 1ULL);
+        static constexpr PackedTagType fpMask =
+            PackedTagType((1ULL << fpBits) - 1ULL);
 
-        static constexpr TagType bucketTypeMask = TagType(1ULL << fpBits);
+        static constexpr PackedTagType bucketIdxMask =
+            PackedTagType(((1ULL << bucketIdxBits) - 1ULL) << fpBits);
 
-        static constexpr TagType bucketIdxMask =
-            TagType(((1ULL << bucketIdxBits) - 1ULL) << (fpBits + 1));
+        __host__ __device__ PackedTag() : value(0) {
+        }
 
-        __host__ __device__
-        PackedTag(TagType fp, uint64_t bucketIdx, bool isPrimary)
+        __host__ __device__ PackedTag(TagType fp, uint64_t bucketIdx)
             : value(0) {
             setFingerprint(fp);
             setBucketIdx(bucketIdx);
-            setBucketType(isPrimary);
         }
 
         __host__ __device__ TagType getFingerprint() const {
-            return value & fpMask;
+            return static_cast<TagType>(value & fpMask);
         }
 
         __host__ __device__ uint64_t getBucketIndex() const {
-            return uint64_t((value & bucketIdxMask) >> (fpBits + 1));
-        }
-
-        __host__ __device__ bool isPrimary() const {
-            return (value & bucketTypeMask) != 0;
-        }
-
-        __host__ __device__ bool isSecondary() const {
-            return !isPrimary();
+            return uint64_t((value & bucketIdxMask) >> fpBits);
         }
 
         __host__ __device__ void setFingerprint(TagType fp) {
-            value = (value & ~fpMask) | (fp & fpMask);
+            value =
+                (value & ~fpMask) | (static_cast<PackedTagType>(fp) & fpMask);
         }
 
         __host__ __device__ void setBucketIdx(size_t bucketIdx) {
-            TagType v = TagType(bucketIdx) << (fpBits + 1);
-
+            PackedTagType v = static_cast<PackedTagType>(bucketIdx) << fpBits;
             value = (value & ~bucketIdxMask) | v;
-        }
-
-        __host__ __device__ void setBucketType(bool primary) {
-            if (primary) {
-                value |= bucketTypeMask;
-            } else {
-                value &= ~bucketTypeMask;
-            }
-        }
-
-        __host__ __device__ void setPrimary() {
-            setBucketType(true);
-        }
-
-        __host__ __device__ void setSecondary() {
-            setBucketType(false);
         }
     };
 
@@ -282,7 +271,7 @@ class BucketsTableGpu {
         }
     }
 
-    size_t insertMany(const T* keys, const size_t n) {
+    size_t insertMany2(const T* keys, const size_t n) {
         T* d_keys;
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
 
@@ -323,6 +312,56 @@ class BucketsTableGpu {
         }
 
         CUDA_CALL(cudaFree(d_keys));
+
+        CUDA_CALL(cudaMemcpy(
+            &h_numOccupied,
+            d_numOccupied,
+            sizeof(size_t),
+            cudaMemcpyDeviceToHost
+        ));
+
+        return h_numOccupied;
+    }
+
+    size_t insertMany(const T* keys, const size_t n) {
+        T* d_keys;
+        PackedTagType* d_packedTags;
+
+        CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
+        CUDA_CALL(cudaMalloc(&d_packedTags, n * sizeof(PackedTagType)));
+
+        CUDA_CALL(
+            cudaMemcpy(d_keys, keys, n * sizeof(T), cudaMemcpyHostToDevice)
+        );
+
+        size_t numBlocks = SDIV(n, blockSize);
+
+        computePackedTagsKernel<Config>
+            <<<numBlocks, blockSize>>>(d_keys, d_packedTags, n, numBuckets);
+
+        void* d_tempStorage = nullptr;
+        size_t tempStorageBytes = 0;
+
+        cub::DeviceRadixSort::SortKeys(
+            d_tempStorage, tempStorageBytes, d_packedTags, d_packedTags, n
+        );
+
+        CUDA_CALL(cudaMalloc(&d_tempStorage, tempStorageBytes));
+
+        cub::DeviceRadixSort::SortKeys(
+            d_tempStorage, tempStorageBytes, d_packedTags, d_packedTags, n
+        );
+
+        CUDA_CALL(cudaFree(d_tempStorage));
+
+        insertKernelSorted<Config><<<numBlocks, blockSize>>>(
+            d_keys, d_packedTags, n, get_device_view()
+        );
+
+        CUDA_CALL(cudaDeviceSynchronize());
+
+        CUDA_CALL(cudaFree(d_keys));
+        CUDA_CALL(cudaFree(d_packedTags));
 
         CUDA_CALL(cudaMemcpy(
             &h_numOccupied,
@@ -504,15 +543,13 @@ __global__ void insertKernel(
     auto block = cg::this_thread_block();
     auto tile = cg::tiled_partition<32>(block);
 
-    size_t idx = globalThreadId();
+    auto idx = globalThreadId();
 
     if (idx >= n) {
         return;
     }
 
-    typename Config::KeyType key = keys[idx];
-
-    int success = tableView.insert(key);
+    int success = tableView.insert(keys[idx]);
 
     int tile_sum = cg::reduce(tile, success, cg::plus<int>());
 
@@ -530,8 +567,80 @@ __global__ void containsKernel(
     size_t n,
     typename BucketsTableGpu<Config>::DeviceTableView tableView
 ) {
-    size_t idx = globalThreadId();
+    auto idx = globalThreadId();
+
     if (idx < n) {
         output[idx] = tableView.contains(keys[idx]);
+    }
+}
+
+template <typename Config>
+__global__ void computePackedTagsKernel(
+    const typename Config::KeyType* keys,
+    typename BucketsTableGpu<Config>::PackedTagType* packedTags,
+    size_t n,
+    size_t numBuckets
+) {
+    size_t idx = globalThreadId();
+
+    if (idx >= n) {
+        return;
+    }
+
+    using BucketsTable = BucketsTableGpu<Config>;
+    using PackedTagType = typename BucketsTable::PackedTagType;
+    constexpr size_t bitsPerTag = Config::bitsPerTag;
+
+    typename Config::KeyType key = keys[idx];
+    auto [i1, i2, fp] = BucketsTable::getCandidateBuckets(key, numBuckets);
+
+    packedTags[idx] = (static_cast<PackedTagType>(i1) << bitsPerTag) |
+                      static_cast<PackedTagType>(fp);
+}
+
+template <typename Config>
+__global__ void insertKernelSorted(
+    const typename Config::KeyType* keys,
+    const typename BucketsTableGpu<Config>::PackedTagType* packedTags,
+    size_t n,
+    typename BucketsTableGpu<Config>::DeviceTableView tableView
+) {
+    auto block = cg::this_thread_block();
+    auto tile = cg::tiled_partition<32>(block);
+
+    size_t idx = globalThreadId();
+
+    if (idx >= n)
+        return;
+
+    using BucketsTable = BucketsTableGpu<Config>;
+    using TagType = typename BucketsTable::TagType;
+    using PackedTagType = typename BucketsTable::PackedTagType;
+    constexpr size_t bitsPerTag = Config::bitsPerTag;
+    constexpr TagType fpMask = (1ULL << bitsPerTag) - 1;
+
+    PackedTagType packedTag = packedTags[idx];
+    size_t primaryBucket = packedTag >> bitsPerTag;
+    auto fp = static_cast<TagType>(packedTag & fpMask);
+
+    size_t secondaryBucket = BucketsTable::getAlternateBucket(
+        primaryBucket, fp, tableView.numBuckets
+    );
+
+    bool success = false;
+    if (tableView.tryInsertAtBucket(primaryBucket, fp) ||
+        tableView.tryInsertAtBucket(secondaryBucket, fp)) {
+        success = true;
+    } else {
+        auto startBucket = (fp & 1) == 0 ? primaryBucket : secondaryBucket;
+        success = tableView.insertWithEviction(fp, startBucket);
+    }
+
+    int tileSum = cg::reduce(tile, static_cast<int>(success), cg::plus<int>());
+
+    if (tile.thread_rank() == 0 && tileSum > 0) {
+        tableView.d_numOccupied->fetch_add(
+            tileSum, cuda::memory_order_relaxed
+        );
     }
 }
