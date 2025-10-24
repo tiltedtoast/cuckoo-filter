@@ -53,4 +53,7 @@ int main(int argc, char** argv) {
     std::cout << "Inserted " << count << " / " << n << " items, found " << found
               << " items in " << duration << " ms"
               << " (load factor = " << table.loadFactor() << ")" << std::endl;
+
+    CUDA_CALL(cudaFreeHost(input));
+    CUDA_CALL(cudaFreeHost(output));
 }

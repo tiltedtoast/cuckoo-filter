@@ -271,7 +271,7 @@ class BucketsTableGpu {
         }
     }
 
-    size_t insertMany2(const T* keys, const size_t n) {
+    size_t insertMany(const T* keys, const size_t n) {
         T* d_keys;
         CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
 
@@ -323,7 +323,7 @@ class BucketsTableGpu {
         return h_numOccupied;
     }
 
-    size_t insertMany(const T* keys, const size_t n) {
+    size_t insertManySorted(const T* keys, const size_t n) {
         T* d_keys;
         PackedTagType* d_packedTags;
 
