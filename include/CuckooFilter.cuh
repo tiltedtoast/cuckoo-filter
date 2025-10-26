@@ -219,20 +219,27 @@ class CuckooFilter {
    public:
     template <typename H>
     static __host__ __device__ uint32_t hash(const H& key) {
-        auto bytes = reinterpret_cast<const cuda::std::byte*>(&key);
-        cuco::xxhash_32<H> hasher;
-        return hasher.compute_hash(bytes, sizeof(H));
+        return cuco::xxhash_32<H>()(key);
     }
 
-    static __host__ __device__ TagType fingerprint(const T& key) {
-        return static_cast<TagType>(hash(key) & tagMask) + 1;
+    template <typename H>
+    static __host__ __device__ uint64_t hash64(const H& key) {
+        return cuco::xxhash_64<H>()(key);
     }
 
     static __host__ __device__ cuda::std::tuple<size_t, size_t, TagType>
     getCandidateBuckets(const T& key, size_t numBuckets) {
-        TagType fp = fingerprint(key);
-        size_t i1 = hash(key) & (numBuckets - 1);
-        size_t i2 = getAlternateBucket(i1, fp, numBuckets);
+        const uint64_t h = hash64(key);
+
+        // Upper 32 bits for the fingerprint
+        const uint32_t h_fp = h >> 32;
+        const TagType fp = static_cast<TagType>(h_fp & tagMask) + 1;
+
+        // Lower 32 bits for the bucket indices
+        const uint32_t h_bucket = h & 0xFFFFFFFF;
+        const size_t i1 = h_bucket & (numBuckets - 1);
+        const size_t i2 = getAlternateBucket(i1, fp, numBuckets);
+
         return {i1, i2, fp};
     }
 
@@ -422,7 +429,8 @@ class CuckooFilter {
 
             if (currentChunkSize > 0) {
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                bool* outputPtr = d_output != nullptr ? d_output + offset : nullptr;
+                bool* outputPtr =
+                    d_output != nullptr ? d_output + offset : nullptr;
                 deleteKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset,
                     outputPtr,

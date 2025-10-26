@@ -30,7 +30,11 @@ def main():
             continue
 
         base_name, size_str = name.rsplit("/", 1)
-        if "Insert" not in base_name or "InsertAndQuery" in base_name:
+        if (
+            "Insert" not in base_name
+            or "InsertAndQuery" in base_name
+            or "InsertQueryDelete" in base_name
+        ):
             continue
 
         try:

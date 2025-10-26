@@ -87,11 +87,13 @@ static void BM_CuckooFilter_Insert(bm::State& state) {
 static void BM_CuckooFilter_Query(bm::State& state) {
     const size_t n = state.range(0);
 
+    auto keys = generateKeys<uint32_t>(n);
+
     MemoryUsage mem{};
     mem.snapshotBefore();
+
     CuckooFilter<Config> filter(n, TARGET_LOAD_FACTOR);
 
-    auto keys = generateKeys<uint32_t>(n);
     thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
     thrust::device_vector<uint8_t> d_output(n);
 
@@ -120,11 +122,13 @@ static void BM_CuckooFilter_Query(bm::State& state) {
 static void BM_CuckooFilter_Delete(bm::State& state) {
     const size_t n = state.range(0);
 
+    auto keys = generateKeys<uint32_t>(n);
+
     MemoryUsage mem{};
     mem.snapshotBefore();
+
     CuckooFilter<Config> filter(n, TARGET_LOAD_FACTOR);
 
-    auto keys = generateKeys<uint32_t>(n);
     thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
     thrust::device_vector<uint8_t> d_output(n);
 
@@ -210,18 +214,21 @@ static void BM_BloomFilter_Query(bm::State& state) {
 
     const size_t numBlocks = cucoNumBlocks<BloomFilter, bitsPerTag>(n);
 
+    auto keys = generateKeys<uint32_t>(n);
+
     MemoryUsage mem{};
     mem.snapshotBefore();
+
     BloomFilter filter(
         cuco::extent{numBlocks},
         cuco::cuda_thread_scope<cuda::thread_scope_device>{}
     );
 
-    auto keys = generateKeys<uint32_t>(n);
     thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
     thrust::device_vector<uint8_t> d_output(n);
 
     filter.add(d_keys.begin(), d_keys.end());
+
     mem.snapshotAfter();
 
     for (auto _ : state) {
@@ -250,13 +257,16 @@ static void BM_BloomFilter_Query(bm::State& state) {
 static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
     const size_t n = state.range(0);
 
+    MemoryUsage mem{};
     auto keys = generateKeys<uint32_t>(n);
+
+    mem.snapshotBefore();
+
     thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
     thrust::device_vector<uint8_t> d_output(n);
 
-    MemoryUsage mem{};
-    mem.snapshotBefore();
     CuckooFilter<Config> filter(n, TARGET_LOAD_FACTOR);
+
     mem.snapshotAfter();
 
     for (auto _ : state) {
@@ -290,12 +300,15 @@ static void BM_CuckooFilter_InsertQueryDelete(bm::State& state) {
     const size_t n = state.range(0);
 
     auto keys = generateKeys<uint32_t>(n);
-    thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
-    thrust::device_vector<uint8_t> d_output(n);
 
     MemoryUsage mem{};
     mem.snapshotBefore();
+
+    thrust::device_vector<uint32_t> d_keys(keys.begin(), keys.end());
+    thrust::device_vector<uint8_t> d_output(n);
+
     CuckooFilter<Config> filter(n, TARGET_LOAD_FACTOR);
+    
     mem.snapshotAfter();
 
     for (auto _ : state) {
