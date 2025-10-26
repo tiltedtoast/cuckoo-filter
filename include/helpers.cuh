@@ -49,3 +49,26 @@ size_t countOnes(T* data, size_t n) {
         printf("%s:%d %s\n", __FILE__, __LINE__, cudaGetErrorString(err_)); \
         exit(err_);                                                         \
     } while (0)
+
+struct MemoryUsage {
+    size_t before = 0;
+    size_t after = 0;
+
+    void snapshotBefore() {
+        size_t free;
+        size_t total;
+        CUDA_CALL(cudaMemGetInfo(&free, &total));
+        before = total - free;
+    }
+
+    void snapshotAfter() {
+        size_t free;
+        size_t total;
+        CUDA_CALL(cudaMemGetInfo(&free, &total));
+        after = total - free;
+    }
+
+    [[nodiscard]] size_t used() const {
+        return after - before;
+    }
+};

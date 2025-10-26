@@ -14,6 +14,11 @@
 #include <vector>
 #include "helpers.cuh"
 
+#if __has_include(<thrust/device_vector.h>)
+    #include <thrust/device_vector.h>
+    #define CUCKOO_FILTER_HAS_THRUST 1
+#endif
+
 namespace cg = cooperative_groups;
 
 template <
@@ -271,10 +276,7 @@ class BucketsTableGpu {
         }
     }
 
-    size_t insertMany(const T* keys, const size_t n) {
-        T* d_keys;
-        CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
-
+    size_t insertMany(const T* d_keys, const size_t n) {
         const size_t numStreams =
             std::clamp(n / blockSize, size_t(1), size_t(12));
 
@@ -290,14 +292,6 @@ class BucketsTableGpu {
             size_t currentChunkSize = std::min(chunkSize, n - offset);
 
             if (currentChunkSize > 0) {
-                CUDA_CALL(cudaMemcpyAsync(
-                    d_keys + offset,
-                    keys + offset,
-                    currentChunkSize * sizeof(T),
-                    cudaMemcpyHostToDevice,
-                    streams[i]
-                ));
-
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
                 insertKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset, currentChunkSize, get_device_view()
@@ -310,8 +304,6 @@ class BucketsTableGpu {
         for (auto& stream : streams) {
             CUDA_CALL(cudaStreamDestroy(stream));
         }
-
-        CUDA_CALL(cudaFree(d_keys));
 
         CUDA_CALL(cudaMemcpy(
             &h_numOccupied,
@@ -373,12 +365,7 @@ class BucketsTableGpu {
         return h_numOccupied;
     }
 
-    void containsMany(const T* keys, const size_t n, bool* output) {
-        T* d_keys;
-        bool* d_output;
-        CUDA_CALL(cudaMalloc(&d_keys, n * sizeof(T)));
-        CUDA_CALL(cudaMalloc(&d_output, n * sizeof(bool)));
-
+    void containsMany(const T* d_keys, const size_t n, bool* d_output) {
         const size_t numStreams =
             std::clamp(n / blockSize, size_t(1), size_t(12));
         const size_t chunkSize = SDIV(n, numStreams);
@@ -393,14 +380,6 @@ class BucketsTableGpu {
             size_t currentChunkSize = std::min(chunkSize, n - offset);
 
             if (currentChunkSize > 0) {
-                CUDA_CALL(cudaMemcpyAsync(
-                    d_keys + offset,
-                    keys + offset,
-                    currentChunkSize * sizeof(T),
-                    cudaMemcpyHostToDevice,
-                    streams[i]
-                ));
-
                 size_t numBlocks = SDIV(currentChunkSize, blockSize);
                 containsKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
                     d_keys + offset,
@@ -408,14 +387,6 @@ class BucketsTableGpu {
                     currentChunkSize,
                     get_device_view()
                 );
-
-                CUDA_CALL(cudaMemcpyAsync(
-                    output + offset,
-                    d_output + offset,
-                    currentChunkSize * sizeof(bool),
-                    cudaMemcpyDeviceToHost,
-                    streams[i]
-                ));
             }
         }
 
@@ -424,10 +395,43 @@ class BucketsTableGpu {
         for (auto& stream : streams) {
             CUDA_CALL(cudaStreamDestroy(stream));
         }
-
-        CUDA_CALL(cudaFree(d_keys));
-        CUDA_CALL(cudaFree(d_output));
     }
+
+#ifdef CUCKOO_FILTER_HAS_THRUST
+    size_t insertMany(const thrust::device_vector<T>& d_keys) {
+        return insertMany(
+            thrust::raw_pointer_cast(d_keys.data()), d_keys.size()
+        );
+    }
+
+    void containsMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<bool>& d_output
+    ) {
+        if (d_output.size() != d_keys.size()) {
+            d_output.resize(d_keys.size());
+        }
+        containsMany(
+            thrust::raw_pointer_cast(d_keys.data()),
+            d_keys.size(),
+            thrust::raw_pointer_cast(d_output.data())
+        );
+    }
+
+    void containsMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<uint8_t>& d_output
+    ) {
+        if (d_output.size() != d_keys.size()) {
+            d_output.resize(d_keys.size());
+        }
+        containsMany(
+            thrust::raw_pointer_cast(d_keys.data()),
+            d_keys.size(),
+            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data()))
+        );
+    }
+#endif  // CUCKOO_FILTER_HAS_THRUST
 
     void clear() {
         CUDA_CALL(cudaMemset(d_buckets, 0, numBuckets * sizeof(Bucket)));
@@ -639,8 +643,6 @@ __global__ void insertKernelSorted(
     int tileSum = cg::reduce(tile, static_cast<int>(success), cg::plus<int>());
 
     if (tile.thread_rank() == 0 && tileSum > 0) {
-        tableView.d_numOccupied->fetch_add(
-            tileSum, cuda::memory_order_relaxed
-        );
+        tableView.d_numOccupied->fetch_add(tileSum, cuda::memory_order_relaxed);
     }
 }

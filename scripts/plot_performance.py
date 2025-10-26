@@ -9,8 +9,10 @@
 import json
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 import matplotlib.pyplot as plt
+
 
 def main():
     try:
@@ -57,7 +59,12 @@ def main():
     ax.grid(True, which="both", ls="--", alpha=0.5)
 
     plt.tight_layout()
-    output_file = "benchmark_performance.png"
+
+    script_dir = Path(__file__).parent
+    build_dir = script_dir.parent / "build"
+    build_dir.mkdir(exist_ok=True)
+
+    output_file = build_dir / "benchmark_performance.png"
     plt.savefig(output_file, dpi=150)
     print(f"Plot saved to {output_file}")
 

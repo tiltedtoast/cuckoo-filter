@@ -7,6 +7,8 @@
 #include <helpers.cuh>
 #include <iostream>
 #include <random>
+#include <thrust/device_vector.h>
+#include <vector>
 
 constexpr double TARGET_LOAD_FACTOR = 0.95;
 
@@ -26,34 +28,31 @@ int main(int argc, char** argv) {
 
     size_t n = (UINT64_C(1) << n_exponent) * TARGET_LOAD_FACTOR;
 
-    uint32_t* input;
     std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint32_t> dist(1, UINT32_MAX);
 
-    CUDA_CALL(cudaMallocHost(&input, sizeof(uint32_t) * n));
+    std::vector<uint32_t> input(n);
+    std::generate(input.begin(), input.end(), [&]() { return dist(rng); });
 
-    std::generate(input, input + n, [&]() { return dist(rng); });
+    thrust::device_vector<uint32_t> d_input(input.begin(), input.end());
+    thrust::device_vector<uint8_t> d_output(n);
 
     using Config = CuckooConfig<uint32_t, 16, 500, 128, 128>;
     auto table = BucketsTableGpu<Config>(n, TARGET_LOAD_FACTOR);
 
-    bool* output;
-
-    CUDA_CALL(cudaMallocHost(&output, sizeof(bool) * n));
-
     auto start = std::chrono::high_resolution_clock::now();
-    size_t count = table.insertMany(input, n);
-    table.containsMany(input, n, output);
+    size_t count = table.insertMany(d_input);
+    table.containsMany(d_input, d_output);
     auto end = std::chrono::high_resolution_clock::now();
     auto duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
             .count();
 
-    size_t found = countOnes(output, n);
+    std::vector<uint8_t> output(n);
+    thrust::copy(d_output.begin(), d_output.end(), output.begin());
+
+    size_t found = countOnes(reinterpret_cast<bool*>(output.data()), n);
     std::cout << "Inserted " << count << " / " << n << " items, found " << found
               << " items in " << duration << " ms"
               << " (load factor = " << table.loadFactor() << ")" << std::endl;
-
-    CUDA_CALL(cudaFreeHost(input));
-    CUDA_CALL(cudaFreeHost(output));
 }
