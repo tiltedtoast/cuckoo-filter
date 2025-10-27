@@ -3,9 +3,9 @@
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <thrust/random.h>
 #include <thrust/transform.h>
-#include <thrust/iterator/counting_iterator.h>
 #include <CuckooFilter.cuh>
 #include <helpers.cuh>
 #include <random>
@@ -14,7 +14,7 @@ namespace bm = benchmark;
 
 constexpr double TARGET_LOAD_FACTOR = 0.95;
 using GPUConfig = CuckooConfig<uint32_t, 16, 500, 128, 128>;
-constexpr size_t CPU_BITS_PER_ITEM = 16;
+constexpr size_t CPU_BITS_PER_ITEM = GPUConfig::bitsPerTag;
 
 template <typename T>
 void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
@@ -23,9 +23,11 @@ void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
         thrust::counting_iterator<size_t>(0),
         thrust::counting_iterator<size_t>(n),
         d_keys.begin(),
-        [seed] __device__ (size_t idx) {
+        [seed] __device__(size_t idx) {
             thrust::default_random_engine rng(seed);
-            thrust::uniform_int_distribution<T> dist(1, std::numeric_limits<T>::max());
+            thrust::uniform_int_distribution<T> dist(
+                1, std::numeric_limits<T>::max()
+            );
             rng.discard(idx);
             return dist(rng);
         }
