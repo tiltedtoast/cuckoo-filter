@@ -3,9 +3,11 @@
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
-#include <thrust/random.h>
-#include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/random.h>
+#include <thrust/reduce.h>
+#include <thrust/transform.h>
+#include <cstdint>
 #include <CuckooFilter.cuh>
 #include <cuco/bloom_filter.cuh>
 #include <cuco/utility/cuda_thread_scope.cuh>
@@ -18,8 +20,6 @@ namespace bm = benchmark;
 constexpr double TARGET_LOAD_FACTOR = 0.95;
 using Config = CuckooConfig<uint32_t, 16, 500, 128, 128>;
 
-
-// Generate random keys on GPU
 template <typename T>
 void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
     size_t n = d_keys.size();
@@ -27,9 +27,11 @@ void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
         thrust::counting_iterator<size_t>(0),
         thrust::counting_iterator<size_t>(n),
         d_keys.begin(),
-        [seed] __device__ (size_t idx) {
+        [seed] __device__(size_t idx) {
             thrust::default_random_engine rng(seed);
-            thrust::uniform_int_distribution<T> dist(1, std::numeric_limits<T>::max());
+            thrust::uniform_int_distribution<T> dist(
+                1, std::numeric_limits<T>::max()
+            );
             rng.discard(idx);
             return dist(rng);
         }
@@ -359,6 +361,126 @@ static void BM_BloomFilter_InsertAndQuery(bm::State& state) {
     );
 }
 
+static void BM_CuckooFilter_FalsePositiveRate(bm::State& state) {
+    const size_t n = state.range(0) * TARGET_LOAD_FACTOR;
+
+    using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, 128>;
+
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPU(d_keys);
+
+    CuckooFilter<FPRConfig> filter(n, TARGET_LOAD_FACTOR);
+    filter.insertMany(d_keys);
+
+    size_t fprTestSize = std::min(n, size_t(1000000));
+    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
+    thrust::device_vector<uint8_t> d_output(fprTestSize);
+
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(fprTestSize),
+        d_neverInserted.begin(),
+        [] __device__(size_t idx) {
+            thrust::default_random_engine rng(99999);
+            thrust::uniform_int_distribution<uint64_t> dist(
+                static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
+            );
+            rng.discard(idx);
+            return dist(rng);
+        }
+    );
+
+    size_t filterMemory = filter.sizeInBytes();
+
+    for (auto _ : state) {
+        filter.containsMany(d_neverInserted, d_output);
+        cudaDeviceSynchronize();
+        bm::DoNotOptimize(d_output.data().get());
+    }
+
+    size_t falsePositives = thrust::reduce(
+        d_output.begin(), d_output.end(), 0ULL, cuda::std::plus<size_t>()
+    );
+    double fpr =
+        static_cast<double>(falsePositives) / static_cast<double>(fprTestSize);
+
+    state.SetItemsProcessed(
+        static_cast<int64_t>(state.iterations() * fprTestSize)
+    );
+    state.counters["false_positive_rate_percentage"] = bm::Counter(fpr * 100);
+    state.counters["false_positives"] =
+        bm::Counter(static_cast<double>(falsePositives));
+    state.counters["memory_bytes"] = bm::Counter(
+        static_cast<double>(filterMemory),
+        bm::Counter::kDefaults,
+        bm::Counter::kIs1024
+    );
+}
+
+static void BM_BloomFilter_FalsePositiveRate(bm::State& state) {
+    const size_t n = state.range(0);
+
+    constexpr auto bitsPerTag = Config::bitsPerTag;
+    using BloomFilter = cuco::bloom_filter<uint64_t>;
+    const size_t numBlocks = cucoNumBlocks<BloomFilter, bitsPerTag>(n);
+
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPU(d_keys);
+
+    BloomFilter filter(
+        cuco::extent{numBlocks},
+        cuco::cuda_thread_scope<cuda::thread_scope_device>{}
+    );
+    filter.add(d_keys.begin(), d_keys.end());
+
+    size_t fprTestSize = std::min(n, size_t(1000000));
+    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
+    thrust::device_vector<uint8_t> d_output(fprTestSize);
+
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(fprTestSize),
+        d_neverInserted.begin(),
+        [] __device__(size_t idx) {
+            thrust::default_random_engine rng(99999);
+            thrust::uniform_int_distribution<uint64_t> dist(
+                static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
+            );
+            rng.discard(idx);
+            return dist(rng);
+        }
+    );
+
+    size_t filterMemory = filter.block_extent() * BloomFilter::words_per_block *
+                          sizeof(typename BloomFilter::word_type);
+
+    for (auto _ : state) {
+        filter.contains(
+            d_neverInserted.begin(), d_neverInserted.end(), d_output.begin()
+        );
+        cudaDeviceSynchronize();
+        bm::DoNotOptimize(d_output.data().get());
+    }
+
+    size_t falsePositives = thrust::reduce(
+        d_output.begin(), d_output.end(), 0ULL, cuda::std::plus<size_t>()
+    );
+    double fpr =
+        static_cast<double>(falsePositives) / static_cast<double>(fprTestSize);
+
+    state.SetItemsProcessed(
+        static_cast<int64_t>(state.iterations() * fprTestSize)
+    );
+    state.counters["false_positive_rate_percentage"] = bm::Counter(fpr * 100);
+    state.counters["false_positives"] =
+        bm::Counter(static_cast<double>(falsePositives));
+    state.counters["memory_bytes"] = bm::Counter(
+        static_cast<double>(filterMemory),
+        bm::Counter::kDefaults,
+        bm::Counter::kIs1024
+    );
+}
+
 BENCHMARK(BM_CuckooFilter_Insert)
     ->Range(1 << 16, 1 << 28)
     ->Unit(bm::kMillisecond);
@@ -388,6 +510,14 @@ BENCHMARK(BM_BloomFilter_InsertAndQuery)
     ->Unit(bm::kMillisecond);
 
 BENCHMARK(BM_CuckooFilter_InsertQueryDelete)
+    ->Range(1 << 16, 1 << 28)
+    ->Unit(bm::kMillisecond);
+
+BENCHMARK(BM_CuckooFilter_FalsePositiveRate)
+    ->Range(1 << 16, 1 << 28)
+    ->Unit(bm::kMillisecond);
+
+BENCHMARK(BM_BloomFilter_FalsePositiveRate)
     ->Range(1 << 16, 1 << 28)
     ->Unit(bm::kMillisecond);
 

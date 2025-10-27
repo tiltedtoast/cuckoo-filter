@@ -1,7 +1,7 @@
 #include <thrust/device_vector.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <thrust/random.h>
 #include <thrust/transform.h>
-#include <thrust/iterator/counting_iterator.h>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
     size_t n = (UINT64_C(1) << n_exponent) * TARGET_LOAD_FACTOR;
 
-    thrust::device_vector<uint32_t> d_input(n);
+    thrust::device_vector<uint64_t> d_input(n);
     thrust::device_vector<uint8_t> d_output(n);
 
     unsigned int seed = std::random_device{}();
@@ -39,15 +39,15 @@ int main(int argc, char** argv) {
         thrust::counting_iterator<size_t>(0),
         thrust::counting_iterator<size_t>(n),
         d_input.begin(),
-        [seed] __device__ (size_t idx) {
+        [seed] __device__(size_t idx) {
             thrust::default_random_engine rng(seed);
-            thrust::uniform_int_distribution<uint32_t> dist(1, UINT32_MAX);
+            thrust::uniform_int_distribution<uint64_t> dist(1, UINT32_MAX);
             rng.discard(idx);
             return dist(rng);
         }
     );
 
-    using Config = CuckooConfig<uint32_t, 16, 500, 256, 128>;
+    using Config = CuckooConfig<uint64_t, 16, 500, 256, 128>;
     auto filter = CuckooFilter<Config>(n, TARGET_LOAD_FACTOR);
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -66,8 +66,48 @@ int main(int argc, char** argv) {
               << " items in " << duration << " ms"
               << " (load factor = " << filter.loadFactor() << ")" << std::endl;
 
+    size_t fprTestSize = std::min(n, size_t(1000000));
+    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
+    thrust::device_vector<uint8_t> d_fprOutput(fprTestSize);
+
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(fprTestSize),
+        d_neverInserted.begin(),
+        [seed] __device__(size_t idx) {
+            thrust::default_random_engine rng(seed + 99999);
+            thrust::uniform_int_distribution<uint64_t> dist(
+                static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
+            );
+            rng.discard(idx);
+            return dist(rng);
+        }
+    );
+
+    start = std::chrono::high_resolution_clock::now();
+    filter.containsMany(d_neverInserted, d_fprOutput);
+    end = std::chrono::high_resolution_clock::now();
+    duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+
+    std::vector<uint8_t> fprOutput(fprTestSize);
+    thrust::copy(d_fprOutput.begin(), d_fprOutput.end(), fprOutput.begin());
+
+    size_t falsePositives =
+        countOnes(reinterpret_cast<bool*>(fprOutput.data()), fprTestSize);
+
+    double fpr = static_cast<double>(falsePositives) /
+                 static_cast<double>(fprTestSize) * 100.0;
+    double theoreticalFPR = 1.0 / (1ULL << Config::bitsPerTag);
+
+    std::cout << "False Positive Rate: " << falsePositives << " / "
+              << fprTestSize << " = " << fpr << "% (theoretical "
+              << 100 * theoreticalFPR << "% for " << Config::bitsPerTag
+              << "-bit tags)" << std::endl;
+
     size_t deleteCount = n / 2;
-    thrust::device_vector<uint32_t> d_deleteKeys(
+    thrust::device_vector<uint64_t> d_deleteKeys(
         d_input.begin(), d_input.begin() + static_cast<ptrdiff_t>(deleteCount)
     );
     thrust::device_vector<uint8_t> d_deleteOutput(deleteCount);

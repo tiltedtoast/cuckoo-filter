@@ -16,7 +16,6 @@ constexpr double TARGET_LOAD_FACTOR = 0.95;
 using GPUConfig = CuckooConfig<uint32_t, 16, 500, 128, 128>;
 constexpr size_t CPU_BITS_PER_ITEM = 16;
 
-// Generate random keys on GPU
 template <typename T>
 void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
     size_t n = d_keys.size();
@@ -33,7 +32,6 @@ void generateKeysGPU(thrust::device_vector<T>& d_keys, unsigned seed = 42) {
     );
 }
 
-// Generate random keys on CPU (for CPU benchmarks)
 template <typename T>
 std::vector<T> generateKeysCPU(size_t n, unsigned seed = 42) {
     std::vector<T> keys(n);
