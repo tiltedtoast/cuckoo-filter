@@ -179,7 +179,7 @@ class CuckooFilter {
             return cleared | (static_cast<uint64_t>(newTag) << shift);
         }
 
-        __forceinline__ __device__ int findSlot(TagType tag, TagType target) {
+        __forceinline__ __device__ int32_t findSlot(TagType tag, TagType target) {
             uint32_t startIdx = tag & (bucketSize - 1);
             size_t startAtomicIdx = startIdx / tagsPerAtomic;
             size_t startTagIdx = startIdx & (tagsPerAtomic - 1);
@@ -224,7 +224,7 @@ class CuckooFilter {
 
                     for (size_t j = jStart; j < jEnd; ++j) {
                         if (extractTag(packed, j) == target) {
-                            return static_cast<int>(atomicIdx * tagsPerAtomic + j);
+                            return static_cast<int32_t>(atomicIdx * tagsPerAtomic + j);
                         }
                     }
                 }
@@ -530,60 +530,34 @@ class CuckooFilter {
         size_t numBuckets;
 
         __device__ bool tryRemoveAtBucket(size_t bucketIdx, TagType tag) {
-            uint32_t startIdx = tag & (bucketSize - 1);
-            size_t startAtomicIdx = startIdx / Bucket::tagsPerAtomic;
-            size_t startTagIdx = startIdx & (Bucket::tagsPerAtomic - 1);
-
             Bucket& bucket = d_buckets[bucketIdx];
 
-            for (size_t i = 0; i < Bucket::atomicCount; ++i) {
-                size_t atomicIdx = (startAtomicIdx + i) & (Bucket::atomicCount - 1);
-                auto expected = bucket.packedTags[atomicIdx].load(cuda::memory_order_relaxed);
-
-                bool retryWord;
-                do {
-                    retryWord = false;
-
-                    size_t jStart, jEnd;
-                    if (i == 0) {
-                        // First iteration: start at startTagIdx, go to end
-                        jStart = startTagIdx;
-                        jEnd = Bucket::tagsPerAtomic;
-                    } else if (atomicIdx != startAtomicIdx) {
-                        // Other atomic words: check all tags
-                        jStart = 0;
-                        jEnd = Bucket::tagsPerAtomic;
-                    } else {
-                        // Wrapped back to the starting atomic word: check from 0 to startTagIdx
-                        jStart = 0;
-                        jEnd = startTagIdx;
-                        if (jEnd == 0) {
-                            continue;
-                        }
-                    }
-
-                    for (size_t j = jStart; j < jEnd; ++j) {
-                        TagType currentTag = bucket.extractTag(expected, j);
-
-                        if (currentTag == tag) {
-                            auto desired = bucket.replaceTag(expected, j, EMPTY);
-
-                            if (bucket.packedTags[atomicIdx].compare_exchange_weak(
-                                    expected,
-                                    desired,
-                                    cuda::memory_order_relaxed,
-                                    cuda::memory_order_relaxed
-                                )) {
-                                return true;
-                            } else {
-                                retryWord = true;
-                                break;
-                            }
-                        }
-                    }
-                } while (retryWord);
+            int32_t slot = bucket.findSlot(tag, tag);
+            if (slot == -1) {
+                return false;
             }
-            return false;
+
+            size_t atomicIdx = slot / Bucket::tagsPerAtomic;
+            size_t tagIdx = slot & (Bucket::tagsPerAtomic - 1);
+
+            auto expected = bucket.packedTags[atomicIdx].load(cuda::memory_order_relaxed);
+
+            do {
+                // Verify the tag is still there
+                if (bucket.extractTag(expected, tagIdx) != tag) {
+                    return false;
+                }
+
+                auto desired = bucket.replaceTag(expected, tagIdx, EMPTY);
+
+                if (bucket.packedTags[atomicIdx].compare_exchange_weak(
+                        expected, desired, cuda::memory_order_relaxed, cuda::memory_order_relaxed
+                    )) {
+                    return true;
+                }
+            } while (bucket.extractTag(expected, tagIdx) == tag);
+
+            return false;  // Tag was removed by another thread during our CAS attempts
         }
 
         __device__ bool tryInsertAtBucket(size_t bucketIdx, TagType tag) {
@@ -713,17 +687,17 @@ __global__ void insertKernel(
     size_t n,
     typename CuckooFilter<Config>::DeviceView view
 ) {
-    using BlockReduce = cub::BlockReduce<int, Config::blockSize>;
+    using BlockReduce = cub::BlockReduce<int32_t, Config::blockSize>;
     __shared__ typename BlockReduce::TempStorage tempStorage;
 
     auto idx = globalThreadId();
 
-    int success = 0;
+    int32_t success = 0;
     if (idx < n) {
         success = view.insert(keys[idx]);
     }
 
-    int blockSum = BlockReduce(tempStorage).Sum(success);
+    int32_t blockSum = BlockReduce(tempStorage).Sum(success);
 
     if (threadIdx.x == 0 && blockSum > 0) {
         view.d_numOccupied->fetch_add(blockSum, cuda::memory_order_relaxed);
@@ -751,12 +725,12 @@ __global__ void deleteKernel(
     size_t n,
     typename CuckooFilter<Config>::DeviceView view
 ) {
-    using BlockReduce = cub::BlockReduce<int, Config::blockSize>;
+    using BlockReduce = cub::BlockReduce<int32_t, Config::blockSize>;
     __shared__ typename BlockReduce::TempStorage tempStorage;
 
     auto idx = globalThreadId();
 
-    int success = 0;
+    int32_t success = 0;
     if (idx < n) {
         success = view.remove(keys[idx]);
 
@@ -765,7 +739,7 @@ __global__ void deleteKernel(
         }
     }
 
-    int blockSum = BlockReduce(tempStorage).Sum(success);
+    int32_t blockSum = BlockReduce(tempStorage).Sum(success);
 
     if (threadIdx.x == 0 && blockSum > 0) {
         view.d_numOccupied->fetch_sub(blockSum, cuda::memory_order_relaxed);
@@ -815,7 +789,7 @@ __global__ void insertKernelSorted(
     constexpr size_t bitsPerTag = Config::bitsPerTag;
     constexpr TagType fpMask = (1ULL << bitsPerTag) - 1;
 
-    int success = 0;
+    int32_t success = 0;
     if (idx < n) {
         PackedTagType packedTag = packedTags[idx];
         size_t primaryBucket = packedTag >> bitsPerTag;
@@ -835,7 +809,7 @@ __global__ void insertKernelSorted(
         }
     }
 
-    int blockSum = BlockReduce(tempStorage).Sum(success);
+    int32_t blockSum = BlockReduce(tempStorage).Sum(success);
 
     if (threadIdx.x == 0 && blockSum > 0) {
         view.d_numOccupied->fetch_add(blockSum, cuda::memory_order_relaxed);
