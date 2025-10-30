@@ -121,5 +121,5 @@ int main(int argc, char** argv) {
     thrust::copy(d_deleteOutput.begin(), d_deleteOutput.end(), deleteOutput.begin());
     size_t stillFound = countOnes(reinterpret_cast<bool*>(deleteOutput.data()), deleteCount);
     std::cout << "After deletion, " << stillFound << " / " << deleteCount
-              << " deleted items still found (false negatives)" << std::endl;
+              << " deleted items still found" << std::endl;
 }

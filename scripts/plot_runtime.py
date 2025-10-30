@@ -53,7 +53,7 @@ def main():
     benchmark_names = sorted(benchmark_data.keys(), key=get_last_value, reverse=True)
 
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-    fig.suptitle("Performance Comparison", fontsize=16)
+    fig.suptitle("Runtime Comparison", fontsize=16)
 
     for bench_name in benchmark_names:
         sizes = sorted(benchmark_data[bench_name].keys())
@@ -74,7 +74,7 @@ def main():
     build_dir = script_dir.parent / "build"
     build_dir.mkdir(exist_ok=True)
 
-    output_file = build_dir / "benchmark_performance.png"
+    output_file = build_dir / "benchmark_runtime.png"
     plt.savefig(output_file, dpi=150)
     print(f"Plot saved to {output_file}")
 
