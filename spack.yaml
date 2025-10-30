@@ -1,0 +1,23 @@
+# This is a Spack Environment file.
+#
+# It describes a set of packages to be installed, along with
+# configuration settings.
+spack:
+  # add package specs to the `specs` list
+  specs:
+  - meson
+  - cuda
+  - hyperfine
+  view: true
+  concretizer:
+    unify: true
+  packages:
+    gcc:
+      externals:
+      - spec: gcc@14.2.1 languages:='c,c++,fortran'
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/gcc
+            cxx: /usr/bin/g++
+            fortran: /usr/bin/gfortran

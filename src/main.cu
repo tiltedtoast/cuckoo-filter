@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
 
     int n_exponent = std::atoi(argv[1]);
 
-    if (n_exponent < 1 || n_exponent > 30) {
-        std::cerr << "Invalid exponent. Use 1-30." << std::endl;
+    if (n_exponent < 1) {
+        std::cerr << "Invalid exponent. Use >= 1" << std::endl;
         return 1;
     }
 
