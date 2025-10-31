@@ -20,7 +20,6 @@ constexpr size_t CPU_BITS_PER_ITEM = GPUConfig::bitsPerTag;
 template <typename T>
 void generateKeysGPU(
     thrust::device_vector<T>& d_keys,
-    unsigned seed = 42,
     T max = std::numeric_limits<T>::max()
 ) {
     size_t n = d_keys.size();
@@ -28,8 +27,8 @@ void generateKeysGPU(
         thrust::counting_iterator<size_t>(0),
         thrust::counting_iterator<size_t>(n),
         d_keys.begin(),
-        [seed, max] __device__(size_t idx) {
-            thrust::default_random_engine rng(seed);
+        [max] __device__(size_t idx) {
+            thrust::default_random_engine rng(42);
             thrust::uniform_int_distribution<T> dist(1, max);
             rng.discard(idx);
             return dist(rng);
@@ -342,7 +341,7 @@ static void BM_GPU_CuckooFilter_FalsePositiveRate(bm::State& state) {
     using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, 128>;
 
     thrust::device_vector<uint64_t> d_keys(n);
-    generateKeysGPU(d_keys, UINT32_MAX);
+    generateKeysGPU<uint64_t>(d_keys, UINT32_MAX);
 
     CuckooFilter<FPRConfig> filter(n);
     filter.insertMany(d_keys);
@@ -429,19 +428,49 @@ static void BM_CPU_CuckooFilter_FalsePositiveRate(bm::State& state) {
     );
 }
 
-BENCHMARK(BM_GPU_CuckooFilter_Insert)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
-BENCHMARK(BM_CPU_CuckooFilter_Insert)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
+BENCHMARK(BM_GPU_CuckooFilter_Insert)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BM_CPU_CuckooFilter_Insert)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_GPU_CuckooFilter_Query)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
-BENCHMARK(BM_CPU_CuckooFilter_Query)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
+BENCHMARK(BM_GPU_CuckooFilter_Query)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BM_CPU_CuckooFilter_Query)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_GPU_CuckooFilter_Delete)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
-BENCHMARK(BM_CPU_CuckooFilter_Delete)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
+BENCHMARK(BM_GPU_CuckooFilter_Delete)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BM_CPU_CuckooFilter_Delete)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_GPU_CuckooFilter_InsertQueryDelete)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
-BENCHMARK(BM_CPU_CuckooFilter_InsertQueryDelete)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
+BENCHMARK(BM_GPU_CuckooFilter_InsertQueryDelete)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BM_CPU_CuckooFilter_InsertQueryDelete)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_GPU_CuckooFilter_FalsePositiveRate)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
-BENCHMARK(BM_CPU_CuckooFilter_FalsePositiveRate)->Range(1 << 16, 1 << 28)->Unit(bm::kMillisecond);
+BENCHMARK(BM_GPU_CuckooFilter_FalsePositiveRate)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BM_CPU_CuckooFilter_FalsePositiveRate)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
 
 BENCHMARK_MAIN();

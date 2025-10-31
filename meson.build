@@ -66,6 +66,15 @@ if get_option('BUILD_BENCHMARKS') == true
         cuda_args: cuda_args,
         install: false,
     )
+
+    executable(
+        'benchmark-cuckoo-bucket-size',
+        './benchmark/cuckoo_bucket_size.cu',
+        dependencies: bench_deps,
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
 endif
 
 if get_option('BUILD_TESTS') == true
