@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
         }
     );
 
-    using Config = CuckooConfig<uint64_t, 16, 500, 256, 32>;
+    using Config = CuckooConfig<uint64_t, 16, 500, 256, 16>;
     auto filter = CuckooFilter<Config>(n);
 
     auto start = std::chrono::high_resolution_clock::now();

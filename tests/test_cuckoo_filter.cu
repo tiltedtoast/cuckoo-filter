@@ -9,7 +9,9 @@
 
 class CuckooFilterTest : public ::testing::Test {
    protected:
-    using Config = CuckooConfig<uint32_t, 16, 1000, 256, 128>;
+    using Config = CuckooConfig<uint32_t, 16, 500, 256, 16>;
+
+    const double TARGET_LOAD_FACTOR = 0.95;
 
     void SetUp() override {
         rng.seed(42);
@@ -122,7 +124,7 @@ TEST_F(CuckooFilterTest, LoadFactor) {
 }
 
 TEST_F(CuckooFilterTest, NearCapacityInsertion) {
-    const size_t numKeys = 1 << 20;
+    const size_t numKeys = (1 << 20) * TARGET_LOAD_FACTOR;
     CuckooFilter<Config> filter(numKeys);
 
     auto keys = generateRandomKeys<uint32_t>(numKeys);
@@ -186,7 +188,6 @@ TEST_F(CuckooFilterTest, BasicDeletion) {
         EXPECT_TRUE(output[i]) << "Key " << keys[i] << " should be found before deletion";
     }
 
-    // Delete keys
     thrust::device_vector<uint8_t> d_deleteOutput(keys.size());
     size_t remainingAfterDelete = filter.deleteMany(d_keys, d_deleteOutput);
 
