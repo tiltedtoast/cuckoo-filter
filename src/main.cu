@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
               << duration << " ms"
               << " (load factor = " << filter.loadFactor() << ")" << std::endl;
 
+    // size_t occupiedSlots = filter.countOccupiedSlots();
+    // std::cout << "Occupied slots: " << occupiedSlots << std::endl;
+
     size_t fprTestSize = std::min(n, size_t(1000000));
     thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
     thrust::device_vector<uint8_t> d_fprOutput(fprTestSize);

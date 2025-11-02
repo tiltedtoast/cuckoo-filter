@@ -160,11 +160,12 @@ class CuckooFilter {
 
         cuda::std::atomic<uint64_t> packedTags[atomicCount];
 
-        __device__ TagType extractTag(uint64_t packed, size_t tagIdx) const {
+        __host__ __device__ TagType extractTag(uint64_t packed, size_t tagIdx) const {
             return static_cast<TagType>((packed >> (tagIdx * bitsPerTag)) & fpMask);
         }
 
-        __device__ uint64_t replaceTag(uint64_t packed, size_t tagIdx, TagType newTag) const {
+        __host__ __device__ uint64_t
+        replaceTag(uint64_t packed, size_t tagIdx, TagType newTag) const {
             size_t shift = tagIdx * bitsPerTag;
             uint64_t cleared = packed & ~(static_cast<uint64_t>(fpMask) << shift);
             return cleared | (static_cast<uint64_t>(newTag) << shift);
@@ -173,37 +174,36 @@ class CuckooFilter {
         __forceinline__ __device__ int32_t findSlot(TagType tag) {
             const uint32_t startSlot = tag & (bucketSize - 1);
             const size_t startAtomicIdx = startSlot / tagsPerAtomic;
-            const size_t startTagIdx = startSlot & (tagsPerAtomic - 1);
 
-            // round down to the nearest even number.
-            const size_t startPairIdx = startAtomicIdx & ~1;
+            if constexpr (atomicCount >= 2) {
+                // round down to the nearest even number
+                const size_t startPairIdx = startAtomicIdx & ~1;
 
-            for (size_t i = 0; i < atomicCount / 2; i++) {
-                const size_t pairIdx = (startPairIdx + i * 2) & (atomicCount - 1);
+                for (size_t i = 0; i < atomicCount / 2; i++) {
+                    const size_t pairIdx = (startPairIdx + i * 2) & (atomicCount - 1);
 
-                const auto vec = __ldg(reinterpret_cast<const ulonglong2*>(&packedTags[pairIdx]));
-                const uint64_t loaded[2] = {vec.x, vec.y};
+                    const auto vec =
+                        __ldg(reinterpret_cast<const ulonglong2*>(&packedTags[pairIdx]));
+                    const uint64_t loaded[2] = {vec.x, vec.y};
 
-                _Pragma("unroll")
-                for (size_t k = 0; k < 2; ++k) {
-                    const size_t currentAtomicIdx = pairIdx + k;
-                    const auto packed = loaded[k];
+                    _Pragma("unroll")
+                    for (size_t k = 0; k < 2; ++k) {
+                        const size_t currentAtomicIdx = pairIdx + k;
+                        const auto packed = loaded[k];
 
-                    size_t jStart = 0;
-                    size_t jEnd = tagsPerAtomic;
-
-                    if (currentAtomicIdx == startAtomicIdx) {
-                        if (i == 0) {
-                            jStart = startTagIdx;
-                        } else {
-                            jEnd = startTagIdx;
+                        for (size_t j = 0; j < tagsPerAtomic; ++j) {
+                            if (extractTag(packed, j) == tag) {
+                                return static_cast<int32_t>(currentAtomicIdx * tagsPerAtomic + j);
+                            }
                         }
                     }
-
-                    for (size_t j = jStart; j < jEnd; ++j) {
-                        if (extractTag(packed, j) == tag) {
-                            return static_cast<int32_t>(currentAtomicIdx * tagsPerAtomic + j);
-                        }
+                }
+            } else {
+                // just check the single atomic
+                const auto packed = packedTags[0].load(cuda::memory_order_relaxed);
+                for (size_t j = 0; j < tagsPerAtomic; ++j) {
+                    if (extractTag(packed, j) == tag) {
+                        return static_cast<int32_t>(j);
                     }
                 }
             }
@@ -424,6 +424,10 @@ class CuckooFilter {
         return insertMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size());
     }
 
+    size_t insertManySorted(const thrust::device_vector<T>& d_keys) {
+        return insertManySorted(thrust::raw_pointer_cast(d_keys.data()), d_keys.size());
+    }
+
     void
     containsMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<bool>& d_output) {
         if (d_output.size() != d_keys.size()) {
@@ -502,6 +506,34 @@ class CuckooFilter {
         return numBuckets * sizeof(Bucket);
     }
 
+    size_t countOccupiedSlots() {
+        std::vector<Bucket> h_buckets(numBuckets);
+
+        CUDA_CALL(cudaMemcpy(
+            h_buckets.data(), d_buckets, numBuckets * sizeof(Bucket), cudaMemcpyDeviceToHost
+        ));
+
+        size_t occupiedCount = 0;
+
+        for (size_t bucketIdx = 0; bucketIdx < numBuckets; ++bucketIdx) {
+            const Bucket& bucket = h_buckets[bucketIdx];
+
+            for (size_t atomicIdx = 0; atomicIdx < Bucket::atomicCount; ++atomicIdx) {
+                uint64_t packed = reinterpret_cast<const uint64_t&>(bucket.packedTags[atomicIdx]);
+
+                for (size_t tagIdx = 0; tagIdx < Bucket::tagsPerAtomic; ++tagIdx) {
+                    auto tag = bucket.extractTag(packed, tagIdx);
+
+                    if (tag != EMPTY) {
+                        occupiedCount++;
+                    }
+                }
+            }
+        }
+
+        return occupiedCount;
+    }
+
     struct DeviceView {
         Bucket* d_buckets;
         cuda::std::atomic<size_t>* d_numOccupied;
@@ -542,7 +574,6 @@ class CuckooFilter {
             Bucket& bucket = d_buckets[bucketIdx];
             const uint32_t startIdx = tag & (bucketSize - 1);
             const size_t startAtomicIdx = startIdx / Bucket::tagsPerAtomic;
-            const size_t startTagIdx = startIdx & (Bucket::tagsPerAtomic - 1);
 
             for (size_t i = 0; i < Bucket::atomicCount; ++i) {
                 const size_t atomicIdx = (startAtomicIdx + i) & (Bucket::atomicCount - 1);
@@ -552,18 +583,7 @@ class CuckooFilter {
                 do {
                     retryWord = false;
 
-                    size_t jStart = 0;
-                    size_t jEnd = Bucket::tagsPerAtomic;
-
-                    if (atomicIdx == startAtomicIdx) {
-                        if (i == 0) {
-                            jStart = startTagIdx;
-                        } else {
-                            jEnd = startTagIdx;
-                        }
-                    }
-
-                    for (size_t j = jStart; j < jEnd; ++j) {
+                    for (size_t j = 0; j < Bucket::tagsPerAtomic; ++j) {
                         if (bucket.extractTag(expected, j) == EMPTY) {
                             auto desired = bucket.replaceTag(expected, j, tag);
 
@@ -590,11 +610,7 @@ class CuckooFilter {
             size_t currentBucket = startBucket;
 
             for (size_t evictions = 0; evictions < maxEvictions; ++evictions) {
-                if (tryInsertAtBucket(currentBucket, currentFp)) {
-                    return true;
-                }
-
-                auto evictSlot = (currentFp + evictions) & (bucketSize - 1);
+                auto evictSlot = (currentFp + evictions * 7) & (bucketSize - 1);
 
                 size_t atomicIdx = evictSlot / Bucket::tagsPerAtomic;
                 size_t tagIdx = evictSlot & (Bucket::tagsPerAtomic - 1);
@@ -612,8 +628,11 @@ class CuckooFilter {
                 ));
 
                 currentFp = evictedFp;
-                currentBucket =
-                    CuckooFilter::getAlternateBucket(currentBucket, evictedFp, numBuckets);
+                currentBucket = getAlternateBucket(currentBucket, evictedFp, numBuckets);
+
+                if (tryInsertAtBucket(currentBucket, currentFp)) {
+                    return true;
+                }
             }
             return false;
         }
