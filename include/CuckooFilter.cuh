@@ -323,32 +323,10 @@ class CuckooFilter {
     }
 
     size_t insertMany(const T* d_keys, const size_t n) {
-        const size_t numStreams = std::clamp(n / blockSize, size_t(1), size_t(12));
-
-        const size_t chunkSize = SDIV(n, numStreams);
-        cudaStream_t streams[numStreams];
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamCreate(&stream));
-        }
-
-        for (size_t i = 0; i < numStreams; ++i) {
-            size_t offset = i * chunkSize;
-            size_t currentChunkSize = std::min(chunkSize, n - offset);
-
-            if (currentChunkSize > 0) {
-                size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                insertKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
-                    d_keys + offset, currentChunkSize, getDeviceView()
-                );
-            }
-        }
+        size_t numBlocks = SDIV(n, blockSize);
+        insertKernel<Config><<<numBlocks, blockSize>>>(d_keys, n, getDeviceView());
 
         CUDA_CALL(cudaDeviceSynchronize());
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamDestroy(stream));
-        }
 
         CUDA_CALL(
             cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
@@ -410,31 +388,10 @@ class CuckooFilter {
     }
 
     void containsMany(const T* d_keys, const size_t n, bool* d_output) {
-        const size_t numStreams = std::clamp(n / blockSize, size_t(1), size_t(12));
-        const size_t chunkSize = SDIV(n, numStreams);
-        cudaStream_t streams[numStreams];
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamCreate(&stream));
-        }
-
-        for (size_t i = 0; i < numStreams; ++i) {
-            size_t offset = i * chunkSize;
-            size_t currentChunkSize = std::min(chunkSize, n - offset);
-
-            if (currentChunkSize > 0) {
-                size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                containsKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
-                    d_keys + offset, d_output + offset, currentChunkSize, getDeviceView()
-                );
-            }
-        }
+        size_t numBlocks = SDIV(n, blockSize);
+        containsKernel<Config><<<numBlocks, blockSize>>>(d_keys, d_output, n, getDeviceView());
 
         CUDA_CALL(cudaDeviceSynchronize());
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamDestroy(stream));
-        }
     }
 
     /**
@@ -448,32 +405,10 @@ class CuckooFilter {
      * @return size_t Updated number of occupied slots in the filter
      */
     size_t deleteMany(const T* d_keys, const size_t n, bool* d_output = nullptr) {
-        const size_t numStreams = std::clamp(n / blockSize, size_t(1), size_t(12));
-        const size_t chunkSize = SDIV(n, numStreams);
-        cudaStream_t streams[numStreams];
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamCreate(&stream));
-        }
-
-        for (size_t i = 0; i < numStreams; ++i) {
-            size_t offset = i * chunkSize;
-            size_t currentChunkSize = std::min(chunkSize, n - offset);
-
-            if (currentChunkSize > 0) {
-                size_t numBlocks = SDIV(currentChunkSize, blockSize);
-                bool* outputPtr = d_output != nullptr ? d_output + offset : nullptr;
-                deleteKernel<Config><<<numBlocks, blockSize, 0, streams[i]>>>(
-                    d_keys + offset, outputPtr, currentChunkSize, getDeviceView()
-                );
-            }
-        }
+        size_t numBlocks = SDIV(n, blockSize);
+        deleteKernel<Config><<<numBlocks, blockSize>>>(d_keys, d_output, n, getDeviceView());
 
         CUDA_CALL(cudaDeviceSynchronize());
-
-        for (auto& stream : streams) {
-            CUDA_CALL(cudaStreamDestroy(stream));
-        }
 
         CUDA_CALL(
             cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
