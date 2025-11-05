@@ -14,7 +14,8 @@ cuda_args = [
     '--expt-extended-lambda',
     '--expt-relaxed-constexpr',
     '--generate-line-info',
-    '-arch=sm_80',
+    '-gencode=arch=compute_120,code=sm_120',
+    '-gencode=arch=compute_75,code=compute_75'
 ]
 
 includes = ['./include']
@@ -22,6 +23,14 @@ includes = ['./include']
 executable(
     'cuckoo-filter-cuda',
     './src/main.cu',
+    include_directories: includes,
+    cuda_args: cuda_args,
+    install: true,
+)
+
+executable(
+    'cuckoo-filter-ipc',
+    './src/ipc_main.cu',
     include_directories: includes,
     cuda_args: cuda_args,
     install: true,
@@ -56,7 +65,13 @@ if get_option('BUILD_BENCHMARKS') == true
     partitioned_sub = cmake.subproject('partitioned-filters', options: partitioned_opts)
     partitioned_dep = partitioned_sub.dependency('filters')
 
-    bench_deps = [benchmark_dep, benchmark_main_dep, cuco_dep, cpu_cuckoo_dep, partitioned_dep]
+    bench_deps = [
+        benchmark_dep,
+        benchmark_main_dep,
+        cuco_dep,
+        cpu_cuckoo_dep,
+        partitioned_dep,
+    ]
 
     executable(
         'benchmark-cuckoo-vs-bloom',

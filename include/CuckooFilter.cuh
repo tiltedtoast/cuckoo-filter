@@ -328,11 +328,7 @@ class CuckooFilter {
 
         CUDA_CALL(cudaDeviceSynchronize());
 
-        CUDA_CALL(
-            cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
-        );
-
-        return h_numOccupied;
+        return occupiedSlots();
     }
 
     /**
@@ -410,11 +406,7 @@ class CuckooFilter {
 
         CUDA_CALL(cudaDeviceSynchronize());
 
-        CUDA_CALL(
-            cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
-        );
-
-        return h_numOccupied;
+        return occupiedSlots();
     }
 
 #ifdef CUCKOO_FILTER_HAS_THRUST
@@ -486,10 +478,14 @@ class CuckooFilter {
     }
 
     float loadFactor() {
+        return static_cast<float>(occupiedSlots()) / (numBuckets * bucketSize);
+    }
+
+    size_t occupiedSlots() {
         CUDA_CALL(
             cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
         );
-        return static_cast<float>(h_numOccupied) / (numBuckets * bucketSize);
+        return h_numOccupied;
     }
 
     size_t capacity() {
