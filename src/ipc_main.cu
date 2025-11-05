@@ -47,10 +47,9 @@ void runClient(const std::string& name, int clientId, size_t numKeys) {
 
         CuckooFilterIPCClient<Config> client(name);
 
-        // Generate random keys
         std::vector<uint64_t> h_keys(numKeys);
         std::random_device rd;
-        std::mt19937_64 gen(rd() + clientId);  // Seed with random + clientId for uniqueness
+        std::mt19937_64 gen(rd() + clientId);
         std::uniform_int_distribution<uint64_t> dis(1, UINT32_MAX);
         for (size_t i = 0; i < numKeys; i++) {
             h_keys[i] = dis(gen);
