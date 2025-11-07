@@ -137,7 +137,7 @@ struct AddSubHashStrategy {
         if (bucket < bucketsPerBlock) {
             return ((bucket + fpHash) % bucketsPerBlock) + bucketsPerBlock;
         } else {
-            return (bucket - (fpHash % bucketsPerBlock)) % bucketsPerBlock;
+            return (bucket - fpHash) % bucketsPerBlock;
         }
     }
 
