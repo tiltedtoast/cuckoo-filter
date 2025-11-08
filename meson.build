@@ -41,6 +41,15 @@ executable(
     install: true,
 )
 
+executable(
+    'cuckoo-filter-ipc-server',
+    './src/ipc_server_main.cu',
+    include_directories: includes + ['./benchmark'],
+    dependencies: deps,
+    cuda_args: cuda_args,
+    install: true,
+)
+
 if get_option('BUILD_BENCHMARKS') == true
     benchmark_dep = dependency('benchmark', required: true)
     benchmark_main_dep = dependency('benchmark_main', required: true)
@@ -99,6 +108,15 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-cuckoo-bucket-size',
         './benchmark/cuckoo_bucket_size.cu',
+        dependencies: bench_deps,
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
+
+    executable(
+        'benchmark-cuckoo-ipc-overhead',
+        './benchmark/cuckoo_ipc_overhead.cu',
         dependencies: bench_deps,
         include_directories: includes,
         cuda_args: cuda_args,

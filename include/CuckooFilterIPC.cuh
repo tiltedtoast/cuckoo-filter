@@ -17,7 +17,8 @@ enum class RequestType {
     INSERT = 0,
     CONTAINS = 1,
     DELETE = 2,
-    SHUTDOWN = 3
+    CLEAR = 3,
+    SHUTDOWN = 4
 };
 
 struct FilterRequest {
@@ -41,7 +42,6 @@ struct SharedRingBuffer {
     sem_t consumerSem;           // Semaphore for pending requests
 
     FilterRequest requests[QUEUE_SIZE];
-    char filterName[64];
 
     bool initialised;
     std::atomic<bool> shuttingDown;
@@ -164,6 +164,14 @@ class CuckooFilterIPCServer {
                 continue;
             }
 
+            if (req.type == RequestType::CLEAR) {
+                filter->clear();
+                req.result = 0;
+                req.completed.store(true, std::memory_order_release);
+                ring->signalDequeued();
+                continue;
+            }
+
             // Skip cancelled requests (from force shutdown)
             if (req.cancelled.load(std::memory_order_acquire)) {
                 req.completed.store(true, std::memory_order_release);
@@ -190,13 +198,17 @@ class CuckooFilterIPCServer {
         T* d_keys = nullptr;
         bool* d_output = nullptr;
 
-        CUDA_CALL(
-            cudaIpcOpenMemHandle((void**)&d_keys, req.keysHandle, cudaIpcMemLazyEnablePeerAccess)
-        );
+        cudaIpcMemHandle_t zeroHandle = {0};
+        bool hasKeys = memcmp(&req.keysHandle, &zeroHandle, sizeof(cudaIpcMemHandle_t)) != 0;
+
+        if (hasKeys) {
+            CUDA_CALL(
+                cudaIpcOpenMemHandle((void**)&d_keys, req.keysHandle, cudaIpcMemLazyEnablePeerAccess)
+            );
+        }
 
         bool hasOutput = false;
         if (req.type == RequestType::CONTAINS || req.type == RequestType::DELETE) {
-            cudaIpcMemHandle_t zeroHandle = {0};
             bool handleValid =
                 memcmp(&req.outputHandle, &zeroHandle, sizeof(cudaIpcMemHandle_t)) != 0;
 
@@ -227,7 +239,9 @@ class CuckooFilterIPCServer {
                 break;
         }
 
-        CUDA_CALL(cudaIpcCloseMemHandle(d_keys));
+        if (hasKeys) {
+            CUDA_CALL(cudaIpcCloseMemHandle(d_keys));
+        }
         if (hasOutput) {
             CUDA_CALL(cudaIpcCloseMemHandle(d_output));
         }
@@ -270,7 +284,6 @@ class CuckooFilterIPCServer {
             request.cancelled.store(false, std::memory_order_release);
         }
 
-        strncpy(ring->filterName, name.c_str(), sizeof(ring->filterName) - 1);
         ring->initialised = true;
     }
 
@@ -400,6 +413,10 @@ class CuckooFilterIPCClient {
         return submitRequest(RequestType::DELETE, d_keys, count, d_output);
     }
 
+    void clear() {
+        submitRequest(RequestType::CLEAR, nullptr, 0, nullptr);
+    }
+
     void requestShutdown() {
         if (ring->isShuttingDown()) {
             return;
@@ -431,7 +448,11 @@ class CuckooFilterIPCClient {
 
         FilterRequest& req = *reqPtr;
 
-        CUDA_CALL(cudaIpcGetMemHandle(&req.keysHandle, const_cast<T*>(d_keys)));
+        if (d_keys != nullptr) {
+            CUDA_CALL(cudaIpcGetMemHandle(&req.keysHandle, const_cast<T*>(d_keys)));
+        } else {
+            memset(&req.keysHandle, 0, sizeof(cudaIpcMemHandle_t));
+        }
 
         if (d_output != nullptr) {
             CUDA_CALL(cudaIpcGetMemHandle(&req.outputHandle, d_output));
@@ -512,8 +533,24 @@ class CuckooFilterIPCClientThrust {
         );
     }
 
+    size_t
+    deleteMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<uint8_t>& d_output) {
+        if (d_output.size() != d_keys.size()) {
+            d_output.resize(d_keys.size());
+        }
+        return client.deleteMany(
+            thrust::raw_pointer_cast(d_keys.data()),
+            d_keys.size(),
+            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data()))
+        );
+    }
+
     size_t deleteMany(const thrust::device_vector<T>& d_keys) {
         return client.deleteMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), nullptr);
+    }
+
+    void clear() {
+        client.clear();
     }
 };
 #endif

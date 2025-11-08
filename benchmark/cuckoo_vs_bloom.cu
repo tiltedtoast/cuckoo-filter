@@ -26,7 +26,7 @@ size_t cucoNumBlocks(size_t n) {
     return (n * bitsPerTag) / (Filter::words_per_block * bitsPerWord);
 }
 
-static void BM_CuckooFilter_Insert(bm::State& state) {
+static void CuckooFilter_Insert(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint32_t> d_keys(n);
@@ -56,7 +56,7 @@ static void BM_CuckooFilter_Insert(bm::State& state) {
     );
 }
 
-static void BM_CuckooFilter_Query(bm::State& state) {
+static void CuckooFilter_Query(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint32_t> d_keys(n);
@@ -85,7 +85,7 @@ static void BM_CuckooFilter_Query(bm::State& state) {
     );
 }
 
-static void BM_CuckooFilter_Delete(bm::State& state) {
+static void CuckooFilter_Delete(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint32_t> d_keys(n);
@@ -118,7 +118,7 @@ static void BM_CuckooFilter_Delete(bm::State& state) {
     );
 }
 
-static void BM_BloomFilter_Insert(bm::State& state) {
+static void BloomFilter_Insert(bm::State& state) {
     const size_t n = state.range(0) * TARGET_LOAD_FACTOR;
 
     constexpr auto bitsPerTag = Config::bitsPerTag;
@@ -156,7 +156,7 @@ static void BM_BloomFilter_Insert(bm::State& state) {
     );
 }
 
-static void BM_BloomFilter_Query(bm::State& state) {
+static void BloomFilter_Query(bm::State& state) {
     const size_t n = state.range(0) * TARGET_LOAD_FACTOR;
 
     constexpr auto bitsPerTag = Config::bitsPerTag;
@@ -199,7 +199,7 @@ static void BM_BloomFilter_Query(bm::State& state) {
     );
 }
 
-static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
+static void CuckooFilter_InsertAndQuery(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint32_t> d_keys(n);
@@ -234,7 +234,7 @@ static void BM_CuckooFilter_InsertAndQuery(bm::State& state) {
     );
 }
 
-static void BM_CuckooFilter_InsertQueryDelete(bm::State& state) {
+static void CuckooFilter_InsertQueryDelete(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint32_t> d_keys(n);
@@ -271,7 +271,7 @@ static void BM_CuckooFilter_InsertQueryDelete(bm::State& state) {
     );
 }
 
-static void BM_BloomFilter_InsertAndQuery(bm::State& state) {
+static void BloomFilter_InsertAndQuery(bm::State& state) {
     const size_t n = state.range(0) * TARGET_LOAD_FACTOR;
 
     constexpr auto bitsPerTag = Config::bitsPerTag;
@@ -318,7 +318,7 @@ static void BM_BloomFilter_InsertAndQuery(bm::State& state) {
     );
 }
 
-static void BM_CuckooFilter_FalsePositiveRate(bm::State& state) {
+static void CuckooFilter_FalsePositiveRate(bm::State& state) {
     using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, 16>;
 
     auto [capacity, n] = calculateCapacityAndSize<FPRConfig>(state.range(0), TARGET_LOAD_FACTOR);
@@ -372,7 +372,7 @@ static void BM_CuckooFilter_FalsePositiveRate(bm::State& state) {
     );
 }
 
-static void BM_BloomFilter_FalsePositiveRate(bm::State& state) {
+static void BloomFilter_FalsePositiveRate(bm::State& state) {
     const size_t n = state.range(0) * TARGET_LOAD_FACTOR;
 
     constexpr auto bitsPerTag = Config::bitsPerTag;
@@ -431,48 +431,48 @@ static void BM_BloomFilter_FalsePositiveRate(bm::State& state) {
     );
 }
 
-BENCHMARK(BM_CuckooFilter_Insert)
+BENCHMARK(CuckooFilter_Insert)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
-BENCHMARK(BM_BloomFilter_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond);
-
-BENCHMARK(BM_CuckooFilter_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond);
-BENCHMARK(BM_BloomFilter_Query)
+BENCHMARK(BloomFilter_Insert)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_CuckooFilter_Delete)
+BENCHMARK(CuckooFilter_Query)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BloomFilter_Query)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_CuckooFilter_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond);
-BENCHMARK(BM_BloomFilter_InsertAndQuery)
+BENCHMARK(CuckooFilter_Delete)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_CuckooFilter_InsertQueryDelete)
+BENCHMARK(CuckooFilter_InsertAndQuery)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BloomFilter_InsertAndQuery)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
 
-BENCHMARK(BM_CuckooFilter_FalsePositiveRate)
+BENCHMARK(CuckooFilter_InsertQueryDelete)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
-BENCHMARK(BM_BloomFilter_FalsePositiveRate)
+
+BENCHMARK(CuckooFilter_FalsePositiveRate)
+    ->RangeMultiplier(2)
+    ->Range(1 << 16, 1ULL << 28)
+    ->Unit(bm::kMillisecond);
+BENCHMARK(BloomFilter_FalsePositiveRate)
     ->RangeMultiplier(2)
     ->Range(1 << 16, 1ULL << 28)
     ->Unit(bm::kMillisecond);
