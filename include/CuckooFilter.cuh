@@ -102,13 +102,12 @@ struct CuckooFilter {
     static_assert(bucketSize > 0, "Bucket size must be greater than 0");
     static_assert(powerOfTwo(bucketSize), "Bucket size must be a power of 2");
 
-    using PackedTagType = uint64_t;
+    using PackedTagType = typename std::conditional<bitsPerTag <= 8, uint32_t, uint64_t>::type;
 
     /**
      * @brief This is used by the sorted insert kernel to store the fingerprint and primary bucket
      * index in a compact format that allows you to sort them directly since the bucket index lives
      * in the upper bits.
-     * FIXME: This should probably be optimised to not use 64 bits when possible
      *
      */
     struct PackedTag {
