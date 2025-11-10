@@ -17,19 +17,19 @@
 namespace bm = benchmark;
 
 constexpr double TARGET_LOAD_FACTOR = 0.95;
-using Config = CuckooConfig<uint32_t, 16, 500, 128, 16, XorHashStrategy>;
+using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorHashStrategy>;
 
-template <typename Filter, size_t bitsPerTag>
+template <typename Filter>
 size_t cucoNumBlocks(size_t n) {
     constexpr auto bitsPerWord = sizeof(typename Filter::word_type) * 8;
 
-    return (n * bitsPerTag) / (Filter::words_per_block * bitsPerWord);
+    return (n * Config::bitsPerTag) / (Filter::words_per_block * bitsPerWord);
 }
 
 static void CuckooFilter_Insert(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     CuckooFilter<Config> filter(capacity);
 
@@ -51,7 +51,7 @@ static void CuckooFilter_Insert(bm::State& state) {
 static void CuckooFilter_Query(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     CuckooFilter<Config> filter(capacity);
     thrust::device_vector<uint8_t> d_output(n);
@@ -72,7 +72,7 @@ static void CuckooFilter_Query(bm::State& state) {
 static void CuckooFilter_Delete(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     CuckooFilter<Config> filter(capacity);
     thrust::device_vector<uint8_t> d_output(n);
@@ -97,11 +97,11 @@ static void CuckooFilter_Delete(bm::State& state) {
 static void BloomFilter_Insert(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    using BloomFilter = cuco::bloom_filter<uint32_t>;
+    using BloomFilter = cuco::bloom_filter<uint64_t>;
 
-    const size_t numBlocks = cucoNumBlocks<BloomFilter, Config::bitsPerTag>(capacity);
+    const size_t numBlocks = cucoNumBlocks<BloomFilter>(capacity);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     BloomFilter filter(numBlocks);
 
@@ -123,10 +123,10 @@ static void BloomFilter_Insert(bm::State& state) {
 static void BloomFilter_Query(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    using BloomFilter = cuco::bloom_filter<uint32_t>;
-    const size_t numBlocks = cucoNumBlocks<BloomFilter, Config::bitsPerTag>(capacity);
+    using BloomFilter = cuco::bloom_filter<uint64_t>;
+    const size_t numBlocks = cucoNumBlocks<BloomFilter>(capacity);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     BloomFilter filter(numBlocks);
 
@@ -153,7 +153,7 @@ static void BloomFilter_Query(bm::State& state) {
 static void CuckooFilter_InsertAndQuery(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     thrust::device_vector<uint8_t> d_output(n);
     CuckooFilter<Config> filter(capacity);
@@ -180,7 +180,7 @@ static void CuckooFilter_InsertAndQuery(bm::State& state) {
 static void CuckooFilter_InsertQueryDelete(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     thrust::device_vector<uint8_t> d_output(n);
     CuckooFilter<Config> filter(capacity);
@@ -209,10 +209,10 @@ static void CuckooFilter_InsertQueryDelete(bm::State& state) {
 static void BloomFilter_InsertAndQuery(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    using BloomFilter = cuco::bloom_filter<uint32_t>;
-    const size_t numBlocks = cucoNumBlocks<BloomFilter, Config::bitsPerTag>(capacity);
+    using BloomFilter = cuco::bloom_filter<uint64_t>;
+    const size_t numBlocks = cucoNumBlocks<BloomFilter>(capacity);
 
-    thrust::device_vector<uint32_t> d_keys(n);
+    thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU(d_keys);
     thrust::device_vector<uint8_t> d_output(n);
 
@@ -242,14 +242,12 @@ static void BloomFilter_InsertAndQuery(bm::State& state) {
 }
 
 static void CuckooFilter_FalsePositiveRate(bm::State& state) {
-    using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, 16>;
-
-    auto [capacity, n] = calculateCapacityAndSize<FPRConfig>(state.range(0), TARGET_LOAD_FACTOR);
+    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
     thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU<uint64_t>(d_keys, UINT32_MAX);
 
-    CuckooFilter<FPRConfig> filter(capacity);
+    CuckooFilter<Config> filter(capacity);
     filter.insertMany(d_keys);
 
     size_t fprTestSize = std::min(n, size_t(1'000'000));
@@ -285,8 +283,8 @@ static void CuckooFilter_FalsePositiveRate(bm::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * fprTestSize));
     state.counters["fpr_percentage"] = bm::Counter(fpr * 100);
     state.counters["false_positives"] = bm::Counter(static_cast<double>(falsePositives));
-    state.counters["bytes_per_item"] = bm::Counter(
-        static_cast<double>(filterMemory) / static_cast<double>(n),
+    state.counters["bits_per_item"] = bm::Counter(
+        static_cast<double>(filterMemory * 8) / static_cast<double>(n),
         bm::Counter::kDefaults,
         bm::Counter::kIs1024
     );
@@ -298,9 +296,8 @@ static void CuckooFilter_FalsePositiveRate(bm::State& state) {
 static void BloomFilter_FalsePositiveRate(bm::State& state) {
     auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
 
-    constexpr auto bitsPerTag = Config::bitsPerTag;
     using BloomFilter = cuco::bloom_filter<uint64_t>;
-    const size_t numBlocks = cucoNumBlocks<BloomFilter, bitsPerTag>(capacity);
+    const size_t numBlocks = cucoNumBlocks<BloomFilter>(capacity);
 
     thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPU<uint64_t>(d_keys, UINT32_MAX);
@@ -342,8 +339,8 @@ static void BloomFilter_FalsePositiveRate(bm::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * fprTestSize));
     state.counters["fpr_percentage"] = bm::Counter(fpr * 100);
     state.counters["false_positives"] = bm::Counter(static_cast<double>(falsePositives));
-    state.counters["bytes_per_item"] = bm::Counter(
-        static_cast<double>(filterMemory) / static_cast<double>(n),
+    state.counters["bits_per_item"] = bm::Counter(
+        static_cast<double>(filterMemory * 8) / static_cast<double>(n),
         bm::Counter::kDefaults,
         bm::Counter::kIs1024
     );

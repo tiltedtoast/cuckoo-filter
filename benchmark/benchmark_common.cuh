@@ -1,5 +1,6 @@
 #pragma once
 
+#include <benchmark/benchmark.h>
 #include <thrust/device_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/random.h>
@@ -10,7 +11,6 @@
 #include <limits>
 #include <random>
 #include <string>
-#include <benchmark/benchmark.h>
 
 template <typename ConfigType>
 std::pair<size_t, size_t> calculateCapacityAndSize(size_t capacity, double loadFactor) {
@@ -95,8 +95,8 @@ void setCommonCounters(benchmark::State& state, size_t memory, size_t n) {
     state.counters["memory_bytes"] = benchmark::Counter(
         static_cast<double>(memory), benchmark::Counter::kDefaults, benchmark::Counter::kIs1024
     );
-    state.counters["bytes_per_item"] = benchmark::Counter(
-        static_cast<double>(memory) / static_cast<double>(n),
+    state.counters["bits_per_item"] = benchmark::Counter(
+        static_cast<double>(memory * 8) / static_cast<double>(n),
         benchmark::Counter::kDefaults,
         benchmark::Counter::kIs1024
     );

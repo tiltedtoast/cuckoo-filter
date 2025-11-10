@@ -147,8 +147,8 @@ static void GPU_CuckooFilter_FalsePositiveRate(bm::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * fprTestSize));
     state.counters["fpr_percentage"] = bm::Counter(fpr * 100);
     state.counters["false_positives"] = bm::Counter(static_cast<double>(falsePositives));
-    state.counters["bytes_per_item"] = bm::Counter(
-        static_cast<double>(filterMemory) / static_cast<double>(n),
+    state.counters["bits_per_item"] = bm::Counter(
+        static_cast<double>(filterMemory * 8) / static_cast<double>(n),
         bm::Counter::kDefaults,
         bm::Counter::kIs1024
     );
@@ -308,8 +308,8 @@ static void PartitionedCPU_CuckooFilter_FalsePositiveRate(bm::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * fprTestSize));
     state.counters["fpr_percentage"] = bm::Counter(fpr * 100);
     state.counters["false_positives"] = bm::Counter(static_cast<double>(falsePositives));
-    state.counters["bytes_per_item"] = bm::Counter(
-        static_cast<double>(filterMemory) / static_cast<double>(n),
+    state.counters["bits_per_item"] = bm::Counter(
+        static_cast<double>(filterMemory * 8) / static_cast<double>(n),
         bm::Counter::kDefaults,
         bm::Counter::kIs1024
     );

@@ -22,7 +22,7 @@ def main():
         sys.exit(1)
 
     memory_data = defaultdict(dict)
-    bytes_per_item_data = defaultdict(dict)
+    bits_per_item_data = defaultdict(dict)
 
     for benchmark in data.get("benchmarks", []):
         name = benchmark.get("name", "")
@@ -42,23 +42,23 @@ def main():
             size = int(size_str)
 
             memory_bytes = None
-            bytes_per_item = None
+            bits_per_item = None
 
             for counter_name, counter_value in benchmark.items():
                 if counter_name == "memory_bytes":
                     memory_bytes = counter_value
-                elif counter_name == "bytes_per_item":
-                    bytes_per_item = counter_value
+                elif counter_name == "bits_per_item":
+                    bits_per_item = counter_value
 
             if memory_bytes is not None:
                 memory_data[base_name][size] = memory_bytes
-            if bytes_per_item is not None:
-                bytes_per_item_data[base_name][size] = bytes_per_item
+            if bits_per_item is not None:
+                bits_per_item_data[base_name][size] = bits_per_item
 
         except ValueError:
             continue
 
-    if not memory_data and not bytes_per_item_data:
+    if not memory_data and not bits_per_item_data:
         print("No memory data found in JSON", file=sys.stderr)
         sys.exit(1)
 
@@ -93,29 +93,29 @@ def main():
         ax1.grid(True, which="both", ls="--", alpha=0.5)
         ax1.set_title("Total Memory Usage", fontsize=14)
 
-    if bytes_per_item_data:
+    if bits_per_item_data:
 
         def get_last_bpi_value(bench_name):
-            sizes = sorted(bytes_per_item_data[bench_name].keys())
+            sizes = sorted(bits_per_item_data[bench_name].keys())
             if sizes:
-                return bytes_per_item_data[bench_name][sizes[-1]]
+                return bits_per_item_data[bench_name][sizes[-1]]
             return 0
 
         benchmark_names = sorted(
-            bytes_per_item_data.keys(), key=get_last_bpi_value, reverse=True
+            bits_per_item_data.keys(), key=get_last_bpi_value, reverse=True
         )
         for bench_name in benchmark_names:
-            sizes = sorted(bytes_per_item_data[bench_name].keys())
-            bpi = [bytes_per_item_data[bench_name][size] for size in sizes]
+            sizes = sorted(bits_per_item_data[bench_name].keys())
+            bpi = [bits_per_item_data[bench_name][size] for size in sizes]
 
             ax2.plot(sizes, bpi, "o-", label=bench_name, linewidth=2, markersize=6)
 
         ax2.set_xlabel("Input Size", fontsize=12)
-        ax2.set_ylabel("Bytes Per Item", fontsize=12)
+        ax2.set_ylabel("Bits Per Item", fontsize=12)
         ax2.set_xscale("log", base=2)
         ax2.legend(fontsize=10, loc="best")
         ax2.grid(True, which="both", ls="--", alpha=0.5)
-        ax2.set_title("Memory Efficiency (Bytes Per Item)", fontsize=14)
+        ax2.set_title("Memory Efficiency (Bits Per Item)", fontsize=14)
 
     plt.tight_layout()
 
