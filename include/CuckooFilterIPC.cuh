@@ -43,7 +43,7 @@ struct SharedQueue {
 
     FilterRequest requests[QUEUE_SIZE];
 
-    bool initialised;
+    std::atomic<bool> initialised;
     std::atomic<bool> shuttingDown;
 
     FilterRequest* enqueue() {
@@ -282,7 +282,7 @@ class CuckooFilterIPCServer {
             request.cancelled.store(false, std::memory_order_release);
         }
 
-        queue->initialised = true;
+        queue->initialised.store(true, std::memory_order_release);
     }
 
     ~CuckooFilterIPCServer() {
@@ -382,7 +382,7 @@ class CuckooFilterIPCClient {
             throw std::runtime_error("Failed to map shared memory");
         }
 
-        if (!queue->initialised) {
+        if (!queue->initialised.load(std::memory_order_acquire)) {
             munmap(queue, sizeof(SharedQueue));
             close(shmFd);
             throw std::runtime_error("Ring buffer not initialised, server may not be ready");
