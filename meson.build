@@ -24,15 +24,6 @@ deps = [
 ]
 
 executable(
-    'cuckoo-filter-cuda',
-    './src/main.cu',
-    include_directories: includes,
-    dependencies: deps,
-    cuda_args: cuda_args,
-    install: true,
-)
-
-executable(
     'cuckoo-filter-ipc',
     './src/ipc_main.cu',
     include_directories: includes,
@@ -44,6 +35,15 @@ executable(
 executable(
     'cuckoo-filter-ipc-server',
     './src/ipc_server_main.cu',
+    include_directories: includes,
+    dependencies: deps,
+    cuda_args: cuda_args,
+    install: true,
+)
+
+executable(
+    'cuckoo-filter-cuda',
+    './src/main.cu',
     include_directories: includes,
     dependencies: deps,
     cuda_args: cuda_args,
@@ -79,18 +79,18 @@ if get_option('BUILD_BENCHMARKS') == true
     partitioned_sub = cmake.subproject('partitioned-filters', options: partitioned_opts)
     partitioned_dep = partitioned_sub.dependency('filters')
 
+    gqf_dep = dependency('quotient-filters', fallback: ['quotient-filters', 'gqf_dep'])
+
     bench_deps = [
         benchmark_dep,
         benchmark_main_dep,
-        cuco_dep,
         cpu_cuckoo_dep,
-        partitioned_dep,
     ]
 
     executable(
         'benchmark-cuckoo-vs-bloom',
         './benchmark/cuckoo_vs_bloom.cu',
-        dependencies: bench_deps,
+        dependencies: bench_deps + [cuco_dep],
         include_directories: includes,
         cuda_args: cuda_args,
         install: false,
@@ -99,7 +99,7 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-cuckoo-cpu-vs-gpu',
         './benchmark/cuckoo_cpu_vs_gpu.cu',
-        dependencies: bench_deps,
+        dependencies: bench_deps + [cpu_cuckoo_dep],
         include_directories: includes,
         cuda_args: cuda_args,
         install: false,
@@ -126,9 +126,18 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-cuckoo-vs-partitioned',
         './benchmark/cuckoo_vs_partitioned.cu',
-        dependencies: bench_deps,
+        dependencies: bench_deps + [partitioned_dep],
         include_directories: includes,
         cuda_args: cuda_args + ['-w'],
+        install: false,
+    )
+
+    executable(
+        'benchmark-cuckoo-vs-gqf',
+        './benchmark/cuckoo_vs_gqf.cu',
+        dependencies: bench_deps + [gqf_dep],
+        include_directories: includes,
+        cuda_args: cuda_args,
         install: false,
     )
 endif

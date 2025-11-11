@@ -1,0 +1,506 @@
+diff --git a/.gitignore b/.gitignore
+index 1377554..21a4db6 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1 +1,4 @@
+ *.swp
++/subprojects/*
++!/subprojects/*.wrap
++!/subprojects/packagefiles
+\ No newline at end of file
+diff --git a/meson.build b/meson.build
+new file mode 100644
+index 0000000..a366320
+--- /dev/null
++++ b/meson.build
+@@ -0,0 +1,24 @@
++project('gqf', 'cpp', 'cuda')
++
++gqf_inc = include_directories('standardQuotientFilter/GPU_version')
++
++cmake = import('cmake')
++
++moderngpu_opts = cmake.subproject_options()
++moderngpu_opts.add_cmake_defines(
++    {
++        'BUILD_TESTING': 'OFF',
++    },
++)
++
++moderngpu_sub = cmake.subproject('moderngpu', options: moderngpu_opts)
++moderngpu_dep = moderngpu_sub.dependency('MODERNGPU')
++
++gqf_lib = static_library(
++    'gqf_lib',
++    ['standardQuotientFilter/GPU_version/quotientFilter.cu'],
++    include_directories: gqf_inc,
++    dependencies: [moderngpu_dep],
++    cuda_args: ['--extended-lambda']
++)
++gqf_dep = declare_dependency(include_directories: gqf_inc, link_with: gqf_lib)
+\ No newline at end of file
+diff --git a/rankSelectQuotientFilter/GPU_version/RSQF.cuh b/rankSelectQuotientFilter/GPU_version/RSQF.cuh
+index ca2343c..1dfe19e 100644
+--- a/rankSelectQuotientFilter/GPU_version/RSQF.cuh
++++ b/rankSelectQuotientFilter/GPU_version/RSQF.cuh
+@@ -21,6 +21,8 @@
+ #define RBITS 5
+ #define SLOTS_PER_BLOCK 64
+ 
++#include <ctime>
++
+ struct __attribute__ ((packed)) cqf_gpu_block
+ {
+     unsigned char offset;
+@@ -33,7 +35,7 @@ struct countingQuotientFilterGPU
+ {
+     unsigned int qbits;
+     unsigned int numBlocks;
+-    cqf_gpu_block* blocks; 
++    cqf_gpu_block* blocks;
+ };
+ 
+ __host__ __device__ size_t calcNumBlocksGPU(unsigned int q);
+@@ -51,14 +53,14 @@ __host__ float launchLookups(countingQuotientFilterGPU cqf, int numValues, unsig
+     /* Looks up value in RSQF.
+     *  Hashes all inputs and sorts before performing lookups, then sorts again to match with inputs.
+     *  Returns the location of the remainder in slotValuesArray if it is found.
+-    *  Returns -1 if the remainder is not found. 
++    *  Returns -1 if the remainder is not found.
+     *  Return value is time for CUDA code.  */
+ 
+ __host__ float launchUnsortedLookups(countingQuotientFilterGPU cqf, int numValues, unsigned int* d_lookupValues, int* d_slotValuesArray);
+     /* Looks up value in RSQF.
+     *  This operation generally has lower throughput than the sorted version.
+     *  Returns the location of the remainder in slotValuesArray if it is found.
+-    *  Returns -1 if the remainder is not found. 
++    *  Returns -1 if the remainder is not found.
+     *  Return value is time for CUDA code.  */
+ 
+ __host__ float insertGPU(countingQuotientFilterGPU cqf, int numValues, unsigned int* d_insertValues, int* d_returnValues);
+diff --git a/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutPerf.cu b/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutPerf.cu
+index b979bb3..4b3ec4a 100644
+--- a/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutPerf.cu
++++ b/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutPerf.cu
+@@ -1,7 +1,8 @@
+ //bulkBuildSegmentedLayoutPerf.cu
+ 
+-#include <stdio.h>
+-#include <assert.h>
++#include <cstdio>
++#include <cassert>
++#include <ctime>
+ #include <string>
+ #include <cuda_profiler_api.h>
+ 
+diff --git a/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutTest.cu b/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutTest.cu
+index 2ab3ae7..26935b8 100644
+--- a/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutTest.cu
++++ b/standardQuotientFilter/GPU_version/bulkBuildSegmentedLayoutTest.cu
+@@ -3,6 +3,7 @@
+ #include <stdio.h>
+ #include <assert.h>
+ #include <string>
++#include <ctime>
+ 
+ #include "../../mt19937ar.h"
+ #include "quotientFilter.cuh"
+@@ -95,7 +96,7 @@ int main(int argc, char* argv[])
+     unsigned int* d_lookupReturnValues;
+     cudaMalloc((void**) &d_lookupReturnValues, numValues * sizeof(unsigned int));
+     cudaMemset(d_lookupReturnValues, 0, numValues * sizeof(unsigned int));
+-    
++
+     CUDAErrorCheck();
+     float lookupTime = launchUnsortedLookups(d_qfilter, numValues, d_randomValues, d_lookupReturnValues);
+     CUDAErrorCheck();
+diff --git a/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsPerf.cu b/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsPerf.cu
+index 1847c9f..e30189a 100644
+--- a/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsPerf.cu
++++ b/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsPerf.cu
+@@ -5,6 +5,7 @@
+ #include <assert.h>
+ #include <string>
+ #include <cuda_profiler_api.h>
++#include <ctime>
+ 
+ #include "../../mt19937ar.h"
+ #include "quotientFilter.cuh"
+diff --git a/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsTest.cu b/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsTest.cu
+index be4b1d8..8a55551 100644
+--- a/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsTest.cu
++++ b/standardQuotientFilter/GPU_version/bulkBuildSequentialShiftsTest.cu
+@@ -1,10 +1,10 @@
+ //bulkBuildSequentialShiftsTest.cu
+ //Builds a quotient filter all at once, only looping as long as it takes to shift all elements to their final locations.
+ 
+-#include <stdio.h>
+ #include <assert.h>
++#include <stdio.h>
++#include <ctime>
+ #include <string>
+-
+ #include "../../mt19937ar.h"
+ #include "quotientFilter.cuh"
+ 
+@@ -72,7 +72,7 @@ int main(int argc, char* argv[])
+     struct quotient_filter d_qfilter;
+     initFilterGPU(&d_qfilter, q, r);
+     cudaMemset(d_qfilter.table, 0, calcNumSlotsGPU(q, r) * sizeof(unsigned char));
+-   
++
+     //Generate set of random numbers
+     printf("Generating random numbers to fill the filter to %3.1f percent full...\n", (alpha * 100));
+     int numValues = alpha * (1 << q);
+@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
+     unsigned int* d_lookupReturnValues;
+     cudaMalloc((void**) &d_lookupReturnValues, numValues * sizeof(unsigned int));
+     cudaMemset(d_lookupReturnValues, 0, numValues * sizeof(unsigned int));
+-    
++
+     CUDAErrorCheck();
+     float lookupTime = launchUnsortedLookups(d_qfilter, numValues, d_randomValues, d_lookupReturnValues);
+     CUDAErrorCheck();
+@@ -116,7 +116,7 @@ int main(int argc, char* argv[])
+             unsigned int hashValue = Normal_APHash(h_randomValues[i], (1 << (q + r)));
+             unsigned int fq = (hashValue >> r) & LOW_BIT_MASK(q);
+             unsigned int fr = hashValue & LOW_BIT_MASK(r);
+-            printf("Quotient = %u \t Remainder = %u\n", fq, fr); 
++            printf("Quotient = %u \t Remainder = %u\n", fq, fr);
+             insertFailures++;
+         }
+     }
+diff --git a/standardQuotientFilter/GPU_version/quotientFilter.cu b/standardQuotientFilter/GPU_version/quotientFilter.cu
+index f41addc..d0b63ba 100644
+--- a/standardQuotientFilter/GPU_version/quotientFilter.cu
++++ b/standardQuotientFilter/GPU_version/quotientFilter.cu
+@@ -15,20 +15,21 @@
+  * limitations under the License.
+  */
+ 
+-#include <stdio.h>
+-#include <limits.h>
+-#include <assert.h>
++#include <cstdio>
++#include <climits>
++#include <cassert>
+ #include <cuda_profiler_api.h>
+ #include "quotientFilter.cuh"
+ #include <thrust/device_vector.h>
+ #include <thrust/sort.h>
+ #include <thrust/scan.h>
+ #include <thrust/unique.h>
+-#include "../../cub-1.7.4/cub/cub.cuh"
+-#include "../../moderngpu/src/moderngpu/kernel_merge.hxx"
++#include <thrust/remove.h>
++#include <cub/cub.cuh>
++#include <moderngpu/kernel_merge.hxx>
+ 
+ #ifndef LOW_BIT_MASK
+-#define LOW_BIT_MASK(n) ((1U << n) - 1U)
++#define LOW_BIT_MASK(n) ((1U << (n)) - 1U)
+ #endif
+ #ifndef NOT_FOUND
+ #define NOT_FOUND UINT_MAX
+@@ -273,7 +274,7 @@ __host__ float launchSortedLookups(quotient_filter qfilter, int numValues, unsig
+ {
+     //Allocate array for hash values
+     thrust::device_vector<unsigned int> d_hashValues(numValues);
+-    thrust::fill(d_hashValues.begin(), d_hashValues.end(), 0); 
++    thrust::fill(d_hashValues.begin(), d_hashValues.end(), 0);
+     unsigned int* d_hashValuesArray = thrust::raw_pointer_cast(&d_hashValues[0]);
+ 
+     cudaEvent_t start, stop;
+@@ -282,13 +283,13 @@ __host__ float launchSortedLookups(quotient_filter qfilter, int numValues, unsig
+     cudaEventRecord(start);
+ 
+     //Hash input values
+-    int numBlocks = (numValues + 127) / 128; 
+-    dim3 hashBlockDims((numBlocks + 31) / 32, 32); 
++    int numBlocks = (numValues + 127) / 128;
++    dim3 hashBlockDims((numBlocks + 31) / 32, 32);
+     hashInputs<<<hashBlockDims, 128>>>(numValues, qfilter, d_lookupValues, d_hashValuesArray);
+ 
+     //Create index array to track inputs -> outputs
+     thrust::device_vector<unsigned int> d_indices(numValues);
+-    thrust::fill(d_indices.begin(), d_indices.end(), 1); 
++    thrust::fill(d_indices.begin(), d_indices.end(), 1);
+     thrust::exclusive_scan(d_indices.begin(), d_indices.end(), d_indices.begin(), 0);
+ 
+     //Sort by fingerprint
+@@ -310,7 +311,6 @@ __host__ float launchSortedLookups(quotient_filter qfilter, int numValues, unsig
+     cudaEventElapsedTime(&lookupTime, start, stop);
+ 
+     //Free Memory
+-    d_hashValues.~device_vector<unsigned int>();
+     cudaEventDestroy(start);
+     cudaEventDestroy(stop);
+ 
+@@ -419,7 +419,7 @@ __global__ void locateInsertSuperclusters(int numItems, quotient_filter qfilter,
+     }
+ }
+ 
+-__global__ void superclusterBidding(int numItems, quotient_filter qfilter, unsigned int* insertValues, unsigned int* superclusterIDs, bool* insertFlags, unsigned int* slotWinners) 
++__global__ void superclusterBidding(int numItems, quotient_filter qfilter, unsigned int* insertValues, unsigned int* superclusterIDs, bool* insertFlags, unsigned int* slotWinners)
+ {
+     //Outputs an array with one value per supercluster. These values can be inserted in parallel without collisions.
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+@@ -483,7 +483,7 @@ __global__ void insertItemGPU(int numItems, quotient_filter qfilter, unsigned in
+         finalLocationValues[idx] = fq;
+         return;
+     }
+-    
++
+     if(!isOccupiedGPU(canonElement)){
+         //set is_occupied to show that there is now a run for this slot
+         setElementGPU(&qfilter, fq, setOccupiedGPU(canonElement));
+@@ -663,7 +663,7 @@ __global__ void findSegmentHeads(int numItems, unsigned int* quotients, unsigned
+ __global__ void calcOffsets(int numItems, unsigned int* locations, unsigned int* segLabels, int* offsets, int* credits, int* creditCarryover)
+ {
+     //compute the shift/credits for a group of elements when merging their segments
+-   
++
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+     if(idx >= numItems || idx ==0) return;
+ 
+@@ -700,14 +700,14 @@ __global__ void shiftElements(int numItems, int* offsets, int* credits, unsigned
+ __global__ void setMetadata(int numItems, unsigned int* remainders, unsigned int* quotients, unsigned int* locations)
+ {
+     //set is_continuation and is_shifted bits for each item in the filter
+-    
++
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+     if(idx >= numItems) return;
+ 
+     unsigned int element = remainders[idx];
+ 
+     element = element << 3; //shift remainder left to make room for metadata bits
+-   
++
+     //is_continuation: check if quotient[i-1] = quotient[i] (this is already stored in segStarts)
+     if(idx != 0 && quotients[idx] == quotients[idx - 1]) element = setContinuationGPU(element);
+ 
+@@ -721,7 +721,7 @@ __global__ void writeRemainders(int numItems, quotient_filter qfilter, unsigned
+ {
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+     if(idx >= numItems) return;
+-    
++
+     setElementGPU(&qfilter, locations[idx], remainders[idx]);
+ }
+ 
+@@ -811,7 +811,6 @@ __host__ float bulkBuildParallelMerging(quotient_filter qfilter, int numValues,
+     dim3 findSegHeadsBlockDims((numBlocks + 31) / 32, 32);
+     findSegmentHeads<<<findSegHeadsBlockDims, 768>>>(numValues, d_quotientsArray, d_segStartsArray);
+     thrust::inclusive_scan(d_segStarts.begin(), d_segStarts.end(), d_segLabels.begin());
+-    d_segStarts.~device_vector<unsigned int>();
+ 
+     //Join segments, calculating shifts along the way
+     int numSegments = d_segLabels[numValues - 1] + 1;
+@@ -827,7 +826,7 @@ __host__ float bulkBuildParallelMerging(quotient_filter qfilter, int numValues,
+     for(int i = 0; i < numLoops; i++){
+         cudaMemset(d_offsets, 0, numSegments * sizeof(int));
+         cudaMemset(d_creditCarryover, 0, numSegments * sizeof(int));
+-        
++
+         //Calculate offsets between segments
+         numBlocks = (numValues + 255) / 256;
+         dim3 findSegHeadsBlockDims((numBlocks + 31) / 32, 32);
+@@ -864,10 +863,7 @@ __host__ float bulkBuildParallelMerging(quotient_filter qfilter, int numValues,
+     cudaEventElapsedTime(&filterBuildTime, start, stop);
+ 
+     //Free memory
+-    d_quotients.~device_vector<unsigned int>();
+     cudaFree(d_remaindersArray);
+-    d_locations.~device_vector<unsigned int>();
+-    d_segLabels.~device_vector<unsigned int>();
+     cudaFree(d_credits);
+     cudaFree(d_offsets);
+     cudaFree(d_creditCarryover);
+@@ -902,7 +898,7 @@ __global__ void shiftSegments(int numItems, unsigned int* segStartLocations, uns
+         int segmentLength;
+         if(idx == (numItems - 1)){
+             segmentLength = numValues - segStartLocations[idx];
+-        } 
++        }
+         else{
+             segmentLength = segStartLocations[idx+1] - segStartLocations[idx];
+         }
+@@ -914,7 +910,7 @@ __global__ void shiftSegments(int numItems, unsigned int* segStartLocations, uns
+ }
+ 
+ void printArray(int numValues, int* array)
+-{   
++{
+     for(int i = 0; i < numValues/10; i++){
+         for(int j = 0; j < 10; j++){
+             printf("%i\t", array[i*10 + j]);
+@@ -997,7 +993,6 @@ __host__ float bulkBuildSequentialShifts(quotient_filter qfilter, int numValues,
+     dim3 findSegHeadsBlockDims((numBlocks + 31) / 32, 32);
+     findSegmentHeads<<<findSegHeadsBlockDims, 768>>>(numValues, d_quotientsArray, d_segStartsArray);
+     thrust::inclusive_scan(d_segStarts.begin(), d_segStarts.end(), d_segLabels.begin());
+-    d_segStarts.~device_vector<unsigned int>();
+ 
+     int numSegments = d_segLabels[numValues - 1] + 1;
+     unsigned int* d_segStartLocations;
+@@ -1044,10 +1039,7 @@ __host__ float bulkBuildSequentialShifts(quotient_filter qfilter, int numValues,
+     cudaEventElapsedTime(&filterBuildTime, start, stop);
+ 
+     //Free memory
+-    d_quotients.~device_vector<unsigned int>();
+     cudaFree(d_remaindersArray);
+-    d_locations.~device_vector<unsigned int>();
+-    d_segLabels.~device_vector<unsigned int>();
+     cudaFree(d_segStartLocations);
+     delete[] h_changesMade;
+     cudaFree(d_changesMade);
+@@ -1060,7 +1052,7 @@ __host__ float bulkBuildSequentialShifts(quotient_filter qfilter, int numValues,
+ __global__ void locateDeleteSuperclusters(int numItems, quotient_filter qfilter, unsigned int* superclusterStarts)
+ {
+     //marks the beginning of each "supercluster" -> really, for deletes this is same as a cluster
+-    
++
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+     if(idx >= numItems) return;
+ 
+@@ -1076,7 +1068,7 @@ __global__ void locateDeleteSuperclusters(int numItems, quotient_filter qfilter,
+ __global__ void deleteItemGPU(int numItems, quotient_filter qfilter, unsigned int* deleteValues, unsigned int* winnerIndices, bool* deleteFlags)
+ {
+     //deletes items from the quotient filter, shifting other items left if required
+-    
++
+     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x + blockIdx.y * gridDim.x * blockDim.x;
+     if(idx >= numItems) return;
+ 
+@@ -1111,7 +1103,7 @@ __global__ void deleteItemGPU(int numItems, quotient_filter qfilter, unsigned in
+     //find beginning of cluster:
+     while(isShiftedGPU(getElementGPU(&qfilter, b))){
+         b--;
+-    }   
++    }
+ 
+     //find start of run we're interested in:
+     //slot counter starts at beginning of cluster
+@@ -1125,7 +1117,7 @@ __global__ void deleteItemGPU(int numItems, quotient_filter qfilter, unsigned in
+         }while((!isOccupiedGPU(getElementGPU(&qfilter, b))));  //count number of runs passed
+     }
+ 
+-    //now s is first value in run of item to be deleted 
++    //now s is first value in run of item to be deleted
+     unsigned int runStart = s;
+     //Search through the run's elements to find item needing to be deleted
+     unsigned int remainder;
+@@ -1545,7 +1537,6 @@ __host__ float bulkBuildSegmentedLayouts(quotient_filter qfilter, int numValues,
+     cudaEventElapsedTime(&buildTime, start, stop);
+ 
+     //Free memory
+-    d_quotients.~device_vector<unsigned int>();
+     cudaFree(d_remaindersArray);
+     cudaFree(d_segmentStarts);
+     cudaFree(d_shifts);
+@@ -1564,18 +1555,18 @@ __global__ void extractQuotients(int numItems, quotient_filter qfilter, unsigned
+     if(idx >= numItems) return;
+ 
+     unsigned int element = getElementGPU(&qfilter, idx);
+-   
++
+     //Empty slots:
+     if(isEmptyGPU(element)){
+         emptySlotFlags[idx] = true;
+         return;
+     }
+ 
+-    //Unshifted elements(beginning of cluster): 
++    //Unshifted elements(beginning of cluster):
+     if(!isShiftedGPU(element)){
+         fingerprints[idx] = (idx << qfilter.rbits) | getRemainderGPU(element);
+         return;
+-    }    
++    }
+ 
+     //Shifted elements:
+     //Find beginning of cluster:
+@@ -1590,12 +1581,12 @@ __global__ void extractQuotients(int numItems, quotient_filter qfilter, unsigned
+         do{
+             s++;
+         }while((isContinuationGPU(getElementGPU(&qfilter, s))));    //find end of each run
+-        if(s > idx) break; 
++        if(s > idx) break;
+         do{
+             b++;
+         }while((!isOccupiedGPU(getElementGPU(&qfilter, b))));    //keeping track of canonical slot
+     }
+-    
++
+     fingerprints[idx] = (b << qfilter.rbits) | getRemainderGPU(element);
+ }
+ 
+@@ -1628,7 +1619,7 @@ __host__ float insertViaMerge(quotient_filter qfilter, unsigned int* d_insertedV
+     d_fingerprintsBySlot.erase(fingerprintsEnd, d_fingerprintsBySlot.end());
+     int numExtractedValues = d_fingerprintsBySlot.end() - d_fingerprintsBySlot.begin();
+ 
+-//Merge with new array 
++//Merge with new array
+     //Hash and quotientize new values to insert
+     thrust::device_vector<unsigned int> d_newFingerprints(numNewValues);
+     thrust::fill(d_newFingerprints.begin(), d_newFingerprints.end(), 0);
+@@ -1725,12 +1716,6 @@ __host__ float insertViaMerge(quotient_filter qfilter, unsigned int* d_insertedV
+     cudaEventElapsedTime(&rebuildTime, start, stop);
+ 
+     //Free Memory
+-    d_emptySlotFlags.~device_vector<bool>();
+-    d_fingerprintsBySlot.~device_vector<unsigned int>();
+-    d_newFingerprints.~device_vector<unsigned int>();
+-    d_fingerprintsOutput.~mem_t<unsigned int>();
+-    d_newFingerprintsMem.~mem_t<unsigned int>();
+-    d_extractedFingerprintsMem.~mem_t<unsigned int>();
+     cudaFree(d_combinedRemainders);
+     cudaFree(d_segmentStarts);
+     cudaFree(d_shifts);
+@@ -1789,7 +1774,7 @@ __host__ float mergeTwoFilters(quotient_filter qfilter1, quotient_filter qfilter
+     d_fingerprintsBySlot2.erase(fingerprintsEnd, d_fingerprintsBySlot2.end());
+     int numExtractedValues2 = d_fingerprintsBySlot2.end() - d_fingerprintsBySlot2.begin();
+ 
+-//Merge arrays of extracted values 
++//Merge arrays of extracted values
+     mgpu::standard_context_t context(false);
+ 
+     int outputSize = numExtractedValues1 + numExtractedValues2;
+@@ -1874,12 +1859,6 @@ __host__ float mergeTwoFilters(quotient_filter qfilter1, quotient_filter qfilter
+     cudaEventElapsedTime(&rebuildTime, start, stop);
+ 
+     //Free Memory
+-    d_emptySlotFlags.~device_vector<bool>();
+-    d_fingerprintsBySlot1.~device_vector<unsigned int>();
+-    d_fingerprintsBySlot2.~device_vector<unsigned int>();
+-    d_fingerprintsOutput.~mem_t<unsigned int>();
+-    d_extractedFingerprintsMem1.~mem_t<unsigned int>();
+-    d_extractedFingerprintsMem2.~mem_t<unsigned int>();
+     cudaFree(d_combinedRemainders);
+     cudaFree(d_segmentStarts);
+     cudaFree(d_shifts);
+diff --git a/standardQuotientFilter/GPU_version/quotientFilter.cuh b/standardQuotientFilter/GPU_version/quotientFilter.cuh
+index 1a1d975..f37b2bf 100644
+--- a/standardQuotientFilter/GPU_version/quotientFilter.cuh
++++ b/standardQuotientFilter/GPU_version/quotientFilter.cuh
+@@ -22,6 +22,9 @@
+ #define NOT_FOUND UINT_MAX
+ #endif
+ 
++#include <ctime>
++#include <string>
++
+ struct quotient_filter
+ {
+     unsigned int qbits;
+diff --git a/subprojects/moderngpu.wrap b/subprojects/moderngpu.wrap
+new file mode 100644
+index 0000000..3041c45
+--- /dev/null
++++ b/subprojects/moderngpu.wrap
+@@ -0,0 +1,4 @@
++[wrap-git]
++url = https://github.com/moderngpu/moderngpu.git
++revision = v2.13.0
++depth = 1
+\ No newline at end of file

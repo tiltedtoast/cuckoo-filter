@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/owensgroup/GPUQuotientFilters.git
+revision = 811cba8bbd345d42023221fae907b866bfa1d4fe
+depth = 1
+diff_files = quotient-filters.patch
+
+[provide]
+dependency_names = gqf_dep
