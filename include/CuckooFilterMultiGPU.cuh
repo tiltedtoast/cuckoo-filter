@@ -11,6 +11,7 @@
 #include <vector>
 #include "helpers.cuh"
 
+// FIXME: This is painfully slow, maybe there's a way to do this without as much host involvement?
 template <typename Config>
 class CuckooFilterMultiGPU {
    public:
