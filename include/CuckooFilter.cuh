@@ -293,11 +293,11 @@ struct CuckooFilter {
         }
     }
 
-    size_t insertMany(const T* d_keys, const size_t n) {
+    size_t insertMany(const T* d_keys, const size_t n, cudaStream_t stream = {}) {
         size_t numBlocks = SDIV(n, blockSize);
-        insertKernel<Config><<<numBlocks, blockSize>>>(d_keys, n, this);
+        insertKernel<Config><<<numBlocks, blockSize, 0, stream>>>(d_keys, n, this);
 
-        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaStreamSynchronize(stream));
 
         return occupiedSlots();
     }
@@ -310,7 +310,7 @@ struct CuckooFilter {
      * @param n Number of keys to insert
      * @return size_t Updated number of occupied slots in the filter
      */
-    size_t insertManySorted(const T* d_keys, const size_t n) {
+    size_t insertManySorted(const T* d_keys, const size_t n, cudaStream_t stream = {}) {
         PackedTagType* d_packedTags;
 
         CUDA_CALL(cudaMalloc(&d_packedTags, n * sizeof(PackedTagType)));
@@ -318,7 +318,7 @@ struct CuckooFilter {
         size_t numBlocks = SDIV(n, blockSize);
 
         computePackedTagsKernel<Config>
-            <<<numBlocks, blockSize>>>(d_keys, d_packedTags, n, numBuckets);
+            <<<numBlocks, blockSize, 0, stream>>>(d_keys, d_packedTags, n, numBuckets);
 
         void* d_tempStorage = nullptr;
         size_t tempStorageBytes = 0;
@@ -335,20 +335,21 @@ struct CuckooFilter {
 
         CUDA_CALL(cudaFree(d_tempStorage));
 
-        insertKernelSorted<Config><<<numBlocks, blockSize>>>(d_keys, d_packedTags, n, this);
+        insertKernelSorted<Config>
+            <<<numBlocks, blockSize, 0, stream>>>(d_keys, d_packedTags, n, this);
 
-        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaStreamSynchronize(stream));
 
         CUDA_CALL(cudaFree(d_packedTags));
 
         return occupiedSlots();
     }
 
-    void containsMany(const T* d_keys, const size_t n, bool* d_output) {
+    void containsMany(const T* d_keys, const size_t n, bool* d_output, cudaStream_t stream = {}) {
         size_t numBlocks = SDIV(n, blockSize);
-        containsKernel<Config><<<numBlocks, blockSize>>>(d_keys, d_output, n, this);
+        containsKernel<Config><<<numBlocks, blockSize, 0, stream>>>(d_keys, d_output, n, this);
 
-        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaStreamSynchronize(stream));
     }
 
     /**
@@ -359,76 +360,98 @@ struct CuckooFilter {
      * @param n Number of keys to remove
      * @param d_output Optional pointer to an output array indicating the success of each key
      * removal
+     * @param stream CUDA stream to use for the operation
      * @return size_t Updated number of occupied slots in the filter
      */
-    size_t deleteMany(const T* d_keys, const size_t n, bool* d_output = nullptr) {
+    size_t deleteMany(
+        const T* d_keys,
+        const size_t n,
+        bool* d_output = nullptr,
+        cudaStream_t stream = {}
+    ) {
         size_t numBlocks = SDIV(n, blockSize);
-        deleteKernel<Config><<<numBlocks, blockSize>>>(d_keys, d_output, n, this);
+        deleteKernel<Config><<<numBlocks, blockSize, 0, stream>>>(d_keys, d_output, n, this);
 
-        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaStreamSynchronize(stream));
 
         return occupiedSlots();
     }
 
 #ifdef CUCKOO_FILTER_HAS_THRUST
-    size_t insertMany(const thrust::device_vector<T>& d_keys) {
-        return insertMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size());
+    size_t insertMany(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
+        return insertMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), stream);
     }
 
-    size_t insertManySorted(const thrust::device_vector<T>& d_keys) {
-        return insertManySorted(thrust::raw_pointer_cast(d_keys.data()), d_keys.size());
+    size_t insertManySorted(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
+        return insertManySorted(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), stream);
     }
 
-    void
-    containsMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<bool>& d_output) {
+    void containsMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<bool>& d_output,
+        cudaStream_t stream = {}
+    ) {
         if (d_output.size() != d_keys.size()) {
             d_output.resize(d_keys.size());
         }
         containsMany(
             thrust::raw_pointer_cast(d_keys.data()),
             d_keys.size(),
-            thrust::raw_pointer_cast(d_output.data())
+            thrust::raw_pointer_cast(d_output.data()),
+            stream
         );
     }
 
-    void
-    containsMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<uint8_t>& d_output) {
+    void containsMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<uint8_t>& d_output,
+        cudaStream_t stream = {}
+    ) {
         if (d_output.size() != d_keys.size()) {
             d_output.resize(d_keys.size());
         }
         containsMany(
             thrust::raw_pointer_cast(d_keys.data()),
             d_keys.size(),
-            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data()))
+            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data())),
+            stream
         );
     }
 
-    size_t
-    deleteMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<bool>& d_output) {
+    size_t deleteMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<bool>& d_output,
+        cudaStream_t stream = {}
+    ) {
         if (d_output.size() != d_keys.size()) {
             d_output.resize(d_keys.size());
         }
         return deleteMany(
             thrust::raw_pointer_cast(d_keys.data()),
             d_keys.size(),
-            thrust::raw_pointer_cast(d_output.data())
+            thrust::raw_pointer_cast(d_output.data()),
+            stream
         );
     }
 
-    size_t
-    deleteMany(const thrust::device_vector<T>& d_keys, thrust::device_vector<uint8_t>& d_output) {
+    size_t deleteMany(
+        const thrust::device_vector<T>& d_keys,
+        thrust::device_vector<uint8_t>& d_output,
+        cudaStream_t stream = {}
+    ) {
         if (d_output.size() != d_keys.size()) {
             d_output.resize(d_keys.size());
         }
         return deleteMany(
             thrust::raw_pointer_cast(d_keys.data()),
             d_keys.size(),
-            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data()))
+            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data())),
+            stream
         );
     }
 
-    size_t deleteMany(const thrust::device_vector<T>& d_keys) {
-        return deleteMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), nullptr);
+    size_t deleteMany(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
+        return deleteMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), nullptr, stream);
     }
 #endif  // CUCKOO_FILTER_HAS_THRUST
 

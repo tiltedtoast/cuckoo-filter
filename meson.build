@@ -50,6 +50,15 @@ executable(
     install: true,
 )
 
+executable(
+    'cuckoo-filter-multi-gpu',
+    './src/multi_gpu_main.cu',
+    include_directories: includes,
+    dependencies: deps,
+    cuda_args: cuda_args,
+    install: true,
+)
+
 if get_option('BUILD_BENCHMARKS') == true
     benchmark_dep = dependency('benchmark', required: true)
     benchmark_main_dep = dependency('benchmark_main', required: true)
