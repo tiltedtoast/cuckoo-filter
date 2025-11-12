@@ -40,18 +40,19 @@ class CuckooFilterMultiGPU {
 
         int deviceCount;
         CUDA_CALL(cudaGetDeviceCount(&deviceCount));
-        assert(
-            numGPUs <= static_cast<size_t>(deviceCount) && "Requested more GPUs than available"
-        );
+        assert(numGPUs <= static_cast<size_t>(deviceCount) && "Requested more GPUs than available");
 
         filters.reserve(numGPUs);
         streams.reserve(numGPUs);
 
         for (size_t i = 0; i < numGPUs; ++i) {
             cudaSetDevice(i);
-            filters[i] = new CuckooFilter<Config>(capacityPerGPU);
 
-            CUDA_CALL(cudaStreamCreate(&streams[i]));
+            filters.push_back(new CuckooFilter<Config>(capacityPerGPU));
+
+            cudaStream_t newStream;
+            CUDA_CALL(cudaStreamCreate(&newStream));
+            streams.push_back(newStream);
         }
 
         cudaSetDevice(0);
