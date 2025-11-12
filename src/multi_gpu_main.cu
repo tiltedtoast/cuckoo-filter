@@ -6,13 +6,13 @@
 #include <CLI/CLI.hpp>
 #include <cstdint>
 #include <ctime>
-#include <CuckooFilterMultiGPU.cuh>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
-#include <hash_strategies.cuh>
-#include <helpers.cuh>
 #include <iostream>
 #include <random>
+#include "CuckooFilterMultiGPU.cuh"
+#include "hash_strategies.cuh"
+#include "helpers.cuh"
 
 int main(int argc, char** argv) {
     CLI::App app{"Multi-GPU Cuckoo Filter Benchmark"};
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
     std::cout << "After deletion, " << stillFound << " / " << deleteCount
               << " deleted items still found" << std::endl;
 
-    std::cout << "\nMulti-GPU Statistics:" << std::endl;
+    std::cout << "\nStatistics:" << std::endl;
     std::cout << "  Total GPUs: " << numGPUsToUse << std::endl;
     std::cout << "  Total capacity: " << filter.totalCapacity() << std::endl;
     std::cout << "  Total occupied: " << filter.totalOccupiedSlots() << std::endl;
