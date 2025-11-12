@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         numGPUsToUse = deviceCount;
     }
 
-    std::cout << "Using " << numGPUsToUse << " GPU(s)" << std::endl;
+    std::cout << "Using " << numGPUsToUse << (numGPUsToUse == 1 ? " GPU" : " GPUs") << std::endl;
 
     using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
 
@@ -60,13 +60,9 @@ int main(int argc, char** argv) {
     std::mt19937_64 rng(seed);
     std::uniform_int_distribution<uint64_t> dist(1, UINT32_MAX);
 
-    auto start_gen = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < n; ++i) {
         h_input[i] = dist(rng);
     }
-    auto end_gen = std::chrono::high_resolution_clock::now();
-    auto duration_gen =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end_gen - start_gen).count();
 
     auto filter = CuckooFilterMultiGPU<Config>(static_cast<size_t>(numGPUsToUse), capacity);
 

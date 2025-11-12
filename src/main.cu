@@ -1,4 +1,5 @@
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/random.h>
 #include <thrust/transform.h>
@@ -62,10 +63,9 @@ int main(int argc, char** argv) {
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-    std::vector<uint8_t> output(n);
-    thrust::copy(d_output.begin(), d_output.end(), output.begin());
+    thrust::host_vector<uint8_t> output = d_output;
 
-    size_t found = countOnes(reinterpret_cast<bool*>(output.data()), n);
+    size_t found = countOnes(reinterpret_cast<bool*>(thrust::raw_pointer_cast(output.data())), n);
     std::cout << "Inserted " << count << " / " << n << " items, found " << found << " items in "
               << duration << " ms"
               << " (load factor = " << filter.loadFactor() << ")" << std::endl;
@@ -96,10 +96,10 @@ int main(int argc, char** argv) {
     end = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-    std::vector<uint8_t> fprOutput(fprTestSize);
-    thrust::copy(d_fprOutput.begin(), d_fprOutput.end(), fprOutput.begin());
+    thrust::host_vector<uint8_t> fprOutput = d_fprOutput;
 
-    size_t falsePositives = countOnes(reinterpret_cast<bool*>(fprOutput.data()), fprTestSize);
+    size_t falsePositives =
+        countOnes(reinterpret_cast<bool*>(thrust::raw_pointer_cast(fprOutput.data())), fprTestSize);
 
     double fpr = static_cast<double>(falsePositives) / static_cast<double>(fprTestSize) * 100.0;
     double theoreticalFPR =
@@ -120,16 +120,19 @@ int main(int argc, char** argv) {
     end = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-    std::vector<uint8_t> deleteOutput(deleteCount);
-    thrust::copy(d_deleteOutput.begin(), d_deleteOutput.end(), deleteOutput.begin());
+    thrust::host_vector<uint8_t> deleteOutput = d_deleteOutput;
 
-    size_t deleted = countOnes(reinterpret_cast<bool*>(deleteOutput.data()), deleteCount);
+    size_t deleted = countOnes(
+        reinterpret_cast<bool*>(thrust::raw_pointer_cast(deleteOutput.data())), deleteCount
+    );
     std::cout << "Deleted " << deleted << " / " << deleteCount << " items in " << duration << " ms"
               << " (load factor = " << filter.loadFactor() << ")" << std::endl;
 
     filter.containsMany(d_deleteKeys, d_deleteOutput);
-    thrust::copy(d_deleteOutput.begin(), d_deleteOutput.end(), deleteOutput.begin());
-    size_t stillFound = countOnes(reinterpret_cast<bool*>(deleteOutput.data()), deleteCount);
+    deleteOutput = d_deleteOutput;
+    size_t stillFound = countOnes(
+        reinterpret_cast<bool*>(thrust::raw_pointer_cast(deleteOutput.data())), deleteCount
+    );
     std::cout << "After deletion, " << stillFound << " / " << deleteCount
               << " deleted items still found" << std::endl;
 }

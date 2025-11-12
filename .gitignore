@@ -4,8 +4,9 @@ build
 .cache
 .clangd
 /subprojects/*
-!/subprojects/*.wrap
 !/subprojects/packagefiles
+!/subprojects/*.wrap
+/subprojects/moderngpu.wrap
 *.*-rep
 *.sqlite
 *.html
