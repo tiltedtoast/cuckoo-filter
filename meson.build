@@ -54,7 +54,7 @@ executable(
     'cuckoo-filter-multi-gpu',
     './src/multi_gpu_main.cu',
     include_directories: includes,
-    dependencies: deps + [nccl_dep],
+    dependencies: deps,
     cuda_args: cuda_args,
     install: true,
 )

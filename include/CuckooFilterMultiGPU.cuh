@@ -37,7 +37,67 @@ class CuckooFilterMultiGPU {
     size_t numGPUs;
     size_t capacityPerGPU;
     std::vector<CuckooFilter<Config>*> filters;
-    std::vector<cudaStream_t> streams;
+
+    /**
+     * @brief Partitions a device vector of keys by their target GPU.
+     *
+     * This function takes a vector of keys, determines the target GPU for each key
+     * and then sorts the keys according to their destination GPU.
+     * It can optionally sort a companion vector of indices at the same time.
+     * The results (counts and offsets for each GPU's data) are returned via output parameters.
+     *
+     * @param d_keys The device vector of keys to be partitioned and sorted. Modified in place.
+     * @param d_indicesToSort (Optional) A pointer to a device vector of indices to be sorted
+     *        along with the keys. Modified in place.
+     * @param h_counts A host vector to be filled with the number of keys for each GPU.
+     * @param h_offsets A host vector to be filled with the starting offset for each GPU's data.
+     */
+    void partitionKeysByGpu(
+        thrust::device_vector<T>& d_keys,
+        thrust::device_vector<size_t>* d_indicesToSort,
+        thrust::host_vector<size_t>& h_counts,
+        thrust::host_vector<size_t>& h_offsets
+    ) {
+        size_t n = d_keys.size();
+        thrust::device_vector<size_t> d_gpuIndices(n);
+        Partitioner partitioner{numGPUs};
+        thrust::transform(
+            thrust::device, d_keys.begin(), d_keys.end(), d_gpuIndices.begin(), partitioner
+        );
+
+        if (d_indicesToSort) {
+            thrust::sort_by_key(
+                thrust::device,
+                d_gpuIndices.begin(),
+                d_gpuIndices.end(),
+                thrust::make_zip_iterator(
+                    thrust::make_tuple(d_keys.begin(), d_indicesToSort->begin())
+                )
+            );
+        } else {
+            thrust::sort_by_key(
+                thrust::device, d_gpuIndices.begin(), d_gpuIndices.end(), d_keys.begin()
+            );
+        }
+
+        thrust::device_vector<size_t> d_counts(numGPUs);
+        thrust::device_vector<size_t> d_offsets(numGPUs);
+        thrust::device_vector<size_t> d_uniqueGpuIds(numGPUs);
+        thrust::reduce_by_key(
+            thrust::device,
+            d_gpuIndices.begin(),
+            d_gpuIndices.end(),
+            thrust::make_constant_iterator<size_t>(1),
+            d_uniqueGpuIds.begin(),
+            d_counts.begin()
+        );
+        thrust::exclusive_scan(
+            thrust::device, d_counts.begin(), d_counts.end(), d_offsets.begin(), 0
+        );
+
+        h_counts = d_counts;
+        h_offsets = d_offsets;
+    }
 
     template <typename FilterFunctor>
     void queryAndReorder(
@@ -62,41 +122,10 @@ class CuckooFilterMultiGPU {
             thrust::device_vector<size_t> d_originalIndices(chunkSize);
             thrust::sequence(thrust::device, d_originalIndices.begin(), d_originalIndices.end());
 
-            thrust::device_vector<size_t> d_gpuIndices(chunkSize);
-            Partitioner partitioner{numGPUs};
-            thrust::transform(
-                thrust::device,
-                d_chunkKeys.begin(),
-                d_chunkKeys.end(),
-                d_gpuIndices.begin(),
-                partitioner
-            );
-            thrust::sort_by_key(
-                thrust::device,
-                d_gpuIndices.begin(),
-                d_gpuIndices.end(),
-                thrust::make_zip_iterator(
-                    thrust::make_tuple(d_chunkKeys.begin(), d_originalIndices.begin())
-                )
-            );
+            thrust::host_vector<size_t> h_counts(numGPUs);
+            thrust::host_vector<size_t> h_offsets(numGPUs);
+            partitionKeysByGpu(d_chunkKeys, &d_originalIndices, h_counts, h_offsets);
 
-            thrust::device_vector<size_t> d_counts(numGPUs);
-            thrust::device_vector<size_t> d_offsets(numGPUs);
-            thrust::device_vector<size_t> d_uniqueGpuIds(numGPUs);
-            thrust::reduce_by_key(
-                thrust::device,
-                d_gpuIndices.begin(),
-                d_gpuIndices.end(),
-                thrust::make_constant_iterator<size_t>(1),
-                d_uniqueGpuIds.begin(),
-                d_counts.begin()
-            );
-            thrust::exclusive_scan(
-                thrust::device, d_counts.begin(), d_counts.end(), d_offsets.begin(), 0
-            );
-
-            thrust::host_vector<size_t> h_counts = d_counts;
-            thrust::host_vector<size_t> h_offsets = d_offsets;
             thrust::device_vector<bool> d_chunkResultsSorted(chunkSize);
 
             parallelForGPUs([&](size_t gpuId) {
@@ -109,24 +138,22 @@ class CuckooFilterMultiGPU {
                         gpuId,
                         d_chunkKeys.data().get() + h_offsets[gpuId],
                         0,
-                        h_counts[gpuId] * sizeof(T),
-                        streams[gpuId]
+                        h_counts[gpuId] * sizeof(T)
                     ));
 
-                    filterOp(filters[gpuId], d_receivedKeys, d_gpuResults, streams[gpuId]);
+                    filterOp(filters[gpuId], d_receivedKeys, d_gpuResults);
 
                     CUDA_CALL(cudaMemcpyPeerAsync(
                         d_chunkResultsSorted.data().get() + h_offsets[gpuId],
                         0,
                         d_gpuResults.data().get(),
                         gpuId,
-                        h_counts[gpuId] * sizeof(bool),
-                        streams[gpuId]
+                        h_counts[gpuId] * sizeof(bool)
                     ));
                 }
             });
 
-            synchronizeAllStreams();
+            synchronizeAllGPUs();
 
             CUDA_CALL(cudaSetDevice(0));
             thrust::device_vector<bool> d_chunkOutput(chunkSize);
@@ -165,24 +192,14 @@ class CuckooFilterMultiGPU {
         });
 
         filters.resize(numGPUs);
-        streams.resize(numGPUs);
 
-        parallelForGPUs([&](size_t i) {
-            filters[i] = new CuckooFilter<Config>(capacityPerGPU);
-            cudaStream_t newStream;
-            CUDA_CALL(cudaStreamCreate(&newStream));
-            streams[i] = newStream;
-        });
+        parallelForGPUs([&](size_t i) { filters[i] = new CuckooFilter<Config>(capacityPerGPU); });
 
         cudaSetDevice(0);
     }
 
     ~CuckooFilterMultiGPU() {
-        parallelForGPUs([&](size_t i) {
-            cudaSetDevice(i);
-            cudaStreamDestroy(streams[i]);
-            delete filters[i];
-        });
+        parallelForGPUs([&](size_t i) { delete filters[i]; });
 
         cudaSetDevice(0);
     }
@@ -196,8 +213,6 @@ class CuckooFilterMultiGPU {
             return totalOccupiedSlots();
         }
 
-        std::vector<thrust::device_vector<T>> d_stagingVectors(numGPUs);
-
         for (size_t chunkOffset = 0; chunkOffset < n; chunkOffset += CHUNK_SIZE) {
             size_t chunkSize = std::min(CHUNK_SIZE, n - chunkOffset);
 
@@ -205,62 +220,27 @@ class CuckooFilterMultiGPU {
             thrust::device_vector<T> d_chunkKeys(
                 h_keys.begin() + chunkOffset, h_keys.begin() + chunkOffset + chunkSize
             );
-            thrust::device_vector<size_t> d_gpuIndices(chunkSize);
-            Partitioner partitioner{numGPUs};
-            thrust::transform(
-                thrust::device,
-                d_chunkKeys.begin(),
-                d_chunkKeys.end(),
-                d_gpuIndices.begin(),
-                partitioner
-            );
 
-            thrust::sort_by_key(
-                thrust::device, d_gpuIndices.begin(), d_gpuIndices.end(), d_chunkKeys.begin()
-            );
-
-            thrust::device_vector<size_t> d_counts(numGPUs);
-            thrust::device_vector<size_t> d_offsets(numGPUs);
-            thrust::device_vector<size_t> d_uniqueGpuIds(numGPUs);
-            thrust::reduce_by_key(
-                thrust::device,
-                d_gpuIndices.begin(),
-                d_gpuIndices.end(),
-                thrust::make_constant_iterator<size_t>(1),
-                d_uniqueGpuIds.begin(),
-                d_counts.begin()
-            );
-            thrust::exclusive_scan(
-                thrust::device, d_counts.begin(), d_counts.end(), d_offsets.begin(), 0
-            );
-
-            thrust::host_vector<size_t> h_counts = d_counts;
-            thrust::host_vector<size_t> h_offsets = d_offsets;
+            thrust::host_vector<size_t> h_counts;
+            thrust::host_vector<size_t> h_offsets;
+            partitionKeysByGpu(d_chunkKeys, nullptr, h_counts, h_offsets);
 
             parallelForGPUs([&](size_t gpuId) {
                 if (h_counts[gpuId] > 0) {
-                    CUDA_CALL(cudaSetDevice(0));
-                    size_t oldSize = d_stagingVectors[gpuId].size();
-                    d_stagingVectors[gpuId].resize(oldSize + h_counts[gpuId]);
+                    thrust::device_vector<T> d_receivedKeys(h_counts[gpuId]);
                     CUDA_CALL(cudaMemcpyPeerAsync(
-                        d_stagingVectors[gpuId].data().get() + oldSize,
+                        d_receivedKeys.data().get(),
                         gpuId,
                         d_chunkKeys.data().get() + h_offsets[gpuId],
                         0,
-                        h_counts[gpuId] * sizeof(T),
-                        streams[gpuId]
+                        h_counts[gpuId] * sizeof(T)
                     ));
+                    filters[gpuId]->insertMany(d_receivedKeys);
                 }
             });
+
+            synchronizeAllGPUs();
         }
-
-        parallelForGPUs([&](size_t gpuId) {
-            if (!d_stagingVectors[gpuId].empty()) {
-                filters[gpuId]->insertMany(d_stagingVectors[gpuId], streams[gpuId]);
-            }
-        });
-
-        synchronizeAllStreams();
 
         CUDA_CALL(cudaSetDevice(0));
         return totalOccupiedSlots();
@@ -272,8 +252,7 @@ class CuckooFilterMultiGPU {
             h_output,
             [](CuckooFilter<Config>* filter,
                const thrust::device_vector<T>& keys,
-               thrust::device_vector<bool>& results,
-               cudaStream_t stream) { filter->containsMany(keys, results, stream); }
+               thrust::device_vector<bool>& results) { filter->containsMany(keys, results); }
         );
     }
 
@@ -283,8 +262,7 @@ class CuckooFilterMultiGPU {
             h_output,
             [](CuckooFilter<Config>* filter,
                const thrust::device_vector<T>& keys,
-               thrust::device_vector<bool>& results,
-               cudaStream_t stream) { filter->deleteMany(keys, results, stream); }
+               thrust::device_vector<bool>& results) { filter->deleteMany(keys, results); }
         );
         return totalOccupiedSlots();
     }
@@ -311,10 +289,8 @@ class CuckooFilterMultiGPU {
         }
     }
 
-    void synchronizeAllStreams() {
-        parallelForGPUs([&](size_t i) {
-            CUDA_CALL(cudaStreamSynchronize(streams[i]));
-        });
+    void synchronizeAllGPUs() {
+        parallelForGPUs([&](size_t) { CUDA_CALL(cudaDeviceSynchronize()); });
     }
 
     size_t totalOccupiedSlots() {
@@ -327,9 +303,7 @@ class CuckooFilterMultiGPU {
     }
 
     void clear() {
-        parallelForGPUs([&](size_t i) {
-            filters[i]->clear();
-        });
+        parallelForGPUs([&](size_t i) { filters[i]->clear(); });
     }
 
     [[nodiscard]] size_t totalCapacity() const {
