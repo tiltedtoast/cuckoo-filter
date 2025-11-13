@@ -212,8 +212,6 @@ class CuckooFilterMultiGPU {
         cudaMemGetInfo(&freeMem, &totalMem);
         chunkSize =
             static_cast<size_t>(static_cast<double>(totalMem) * CHUNK_SIZE_FACTOR / sizeof(T));
-
-        cudaSetDevice(primaryGPU);
     }
 
     ~CuckooFilterMultiGPU() {
@@ -222,7 +220,7 @@ class CuckooFilterMultiGPU {
             CUDA_CALL(cudaStreamDestroy(streams[i]));
         });
 
-        cudaSetDevice(primaryGPU);
+        CUDA_CALL(cudaSetDevice(primaryGPU));
     }
 
     CuckooFilterMultiGPU(const CuckooFilterMultiGPU&) = delete;
@@ -309,7 +307,9 @@ class CuckooFilterMultiGPU {
 
     size_t totalOccupiedSlots() {
         std::atomic<size_t> total(0);
-        parallelForGPUs([&](size_t i) { total.fetch_add(filters[i]->occupiedSlots()); });
+        parallelForGPUs([&](size_t i) {
+            total.fetch_add(filters[i]->occupiedSlots(), std::memory_order_relaxed);
+        });
         return total;
     }
 
