@@ -6,11 +6,12 @@ spack:
   # add package specs to the `specs` list
   specs:
   - meson
-  - cuda
+  - nvhpc
   - hyperfine
   view: true
   concretizer:
-    unify: true
+    unify: when_possible
+    reuse: true
   packages:
     gcc:
       externals:
