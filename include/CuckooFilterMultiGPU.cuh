@@ -479,7 +479,7 @@ class CuckooFilterMultiGPU {
                     0
                 );
                 size_t totalToReceive = thrust::reduce(
-                    thrust::device, d_recvCounts.begin(), d_recvCounts.end(), (size_t)0
+                    thrust::device, d_recvCounts.begin(), d_recvCounts.end(), size_t(0)
                 );
 
                 if (totalToReceive == 0) {
