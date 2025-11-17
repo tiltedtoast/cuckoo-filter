@@ -1,3 +1,4 @@
+#include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/random.h>
@@ -54,15 +55,23 @@ int main(int argc, char** argv) {
 
     std::cout << "Using " << Config::AltBucketPolicy::name << std::endl;
 
-    thrust::host_vector<uint64_t> h_input(n);
+    thrust::device_vector<uint64_t> d_input(n);
 
     unsigned int seed = std::random_device{}();
-    std::mt19937_64 rng(seed);
-    std::uniform_int_distribution<uint64_t> dist(1, UINT32_MAX);
 
-    for (size_t i = 0; i < n; ++i) {
-        h_input[i] = dist(rng);
-    }
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(n),
+        d_input.begin(),
+        [seed] __device__(size_t idx) {
+            thrust::default_random_engine rng(seed);
+            thrust::uniform_int_distribution<uint64_t> dist(1, UINT32_MAX);
+            rng.discard(idx);
+            return dist(rng);
+        }
+    );
+
+    thrust::host_vector<uint64_t> h_input = d_input;
 
     auto filter = CuckooFilterMultiGPU<Config>(static_cast<size_t>(numGPUsToUse), capacity);
 
@@ -71,8 +80,10 @@ int main(int argc, char** argv) {
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
+    double loadFactor = filter.loadFactor();
+
     std::cout << "Inserted " << count << " / " << n << " items in " << duration << " ms"
-              << " (load factor = " << filter.loadFactor() << ")" << std::endl;
+              << " (load factor = " << loadFactor << ")" << std::endl;
 
     thrust::host_vector<bool> h_output(n);
 
@@ -85,16 +96,23 @@ int main(int argc, char** argv) {
     std::cout << "Found " << found << " / " << n << " items in " << duration << " ms" << std::endl;
 
     size_t fprTestSize = std::min(n, size_t(1000000));
-    thrust::host_vector<uint64_t> h_neverInserted(fprTestSize);
+    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
     thrust::host_vector<bool> h_fprOutput(fprTestSize);
 
-    std::uniform_int_distribution<uint64_t> fprDist(
-        static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(fprTestSize),
+        d_neverInserted.begin(),
+        [seed] __device__(size_t idx) {
+            thrust::default_random_engine rng(seed + 1);
+            thrust::uniform_int_distribution<uint64_t> dist(
+                static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
+            );
+            rng.discard(idx);
+            return dist(rng);
+        }
     );
-
-    for (size_t i = 0; i < fprTestSize; ++i) {
-        h_neverInserted[i] = fprDist(rng);
-    }
+    thrust::host_vector<uint64_t> h_neverInserted = d_neverInserted;
 
     start = std::chrono::high_resolution_clock::now();
     filter.containsMany(h_neverInserted, h_fprOutput);
@@ -104,12 +122,15 @@ int main(int argc, char** argv) {
     size_t falsePositives = countOnes(h_fprOutput.data(), fprTestSize);
 
     double fpr = static_cast<double>(falsePositives) / static_cast<double>(fprTestSize) * 100.0;
+    double theoreticalFPR2 =
+        static_cast<double>(2 * Config::bucketSize * loadFactor) / (1ULL << Config::bitsPerTag);
+
     double theoreticalFPR =
-        static_cast<double>(2 * Config::bucketSize) / (1ULL << Config::bitsPerTag);
+        1 - std::pow(1 - std::pow(2, -Config::bitsPerTag), 2 * Config::bucketSize * loadFactor);
 
     std::cout << "False Positive Rate: " << falsePositives << " / " << fprTestSize << " = " << fpr
-              << "% (theoretical " << 100 * theoreticalFPR << "% for " << Config::bitsPerTag
-              << "-bit tags and " << Config::bucketSize << " tags per buckets)" << std::endl;
+              << "% (theoretical " << 100 * theoreticalFPR << "% for f = " << Config::bitsPerTag
+              << ", b = " << Config::bucketSize << ", α = " << loadFactor << ")" << std::endl;
 
     size_t deleteCount = n / 2;
     thrust::host_vector<uint64_t> h_deleteKeys(deleteCount);
