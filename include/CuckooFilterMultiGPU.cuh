@@ -175,8 +175,7 @@ class CuckooFilterMultiGPU {
 
             // Estimate memory needed per item, including overhead.
             // If reordering is needed, we also need to store the original index.
-            const size_t memPerItem =
-                sizeof(T) + sizeof(size_t) + (hasOutput ? sizeof(size_t) : 0);
+            const size_t memPerItem = sizeof(T) + sizeof(size_t) + (hasOutput ? sizeof(size_t) : 0);
 
             // Thrust likes to use A LOT of temporary memory
             const float safetyFactor = 3.0f;
@@ -237,10 +236,7 @@ class CuckooFilterMultiGPU {
                 thrust::device_vector<size_t> d_sendCounts(numGPUs);
                 thrust::device_vector<size_t> d_sendOffsets(numGPUs);
                 partitionByGPU(
-                    d_localKeys,
-                    d_sendCounts,
-                    d_sendOffsets,
-                    hasOutput ? &d_localIndices : nullptr
+                    d_localKeys, d_sendCounts, d_sendOffsets, hasOutput ? &d_localIndices : nullptr
                 );
 
                 thrust::device_vector<size_t> d_recvCounts(numGPUs);
@@ -495,7 +491,7 @@ class CuckooFilterMultiGPU {
         parallelForGPUs([&](size_t i) { CUDA_CALL(cudaStreamSynchronize(streams[i])); });
     }
 
-    size_t totalOccupiedSlots() {
+    [[nodiscard]] size_t totalOccupiedSlots() const {
         std::atomic<size_t> total(0);
         parallelForGPUs([&](size_t i) {
             total.fetch_add(filters[i]->occupiedSlots(), std::memory_order_relaxed);
