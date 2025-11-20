@@ -9,12 +9,11 @@ docs:
   stage: build
   image: alpine:latest
   before_script:
-    - apk add --no-cache doxygen graphviz ttf-freefont meson python3 g++
+    - apk add --no-cache doxygen graphviz ttf-freefont
   script:
-    - meson setup build -Dbuildtype=plain -DBUILD_BENCHMARKS=false -DBUILD_TESTS=false
-    - meson compile -C build docs
-    - mkdir -p docs/html
-    - cp -r build/docs/html/* docs/html/
+    # Generate Doxyfile directly without Meson
+    - sed 's/@project_name@/GPU-Accelerated Cuckoo Filter/g; s|@doc_out@|docs|g; s|@input_dir@|include|g' Doxyfile.in > Doxyfile
+    - doxygen Doxyfile
   artifacts:
     paths:
       - docs/html
