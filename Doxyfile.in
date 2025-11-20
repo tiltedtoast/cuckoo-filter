@@ -1,0 +1,36 @@
+# Project info
+PROJECT_NAME           = "GPU-Accelerated Cuckoo Filter"
+OUTPUT_DIRECTORY       = @doc_out@
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+FULL_PATH_NAMES        = NO
+
+# Inputs
+INPUT                  = @input_dir@
+FILE_PATTERNS          = *.cuh
+RECURSIVE              = YES
+EXTENSION_MAPPING      = cuh=C++
+
+# Extraction settings
+EXTRACT_ALL            = YES
+EXTRACT_LOCAL_CLASSES  = YES
+
+# Documentation settings
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+JAVADOC_AUTOBRIEF      = YES
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+
+# Graphviz
+HAVE_DOT               = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+DOT_IMAGE_FORMAT       = svg
+
+QUIET                  = YES

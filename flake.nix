@@ -45,6 +45,8 @@
           meson
           uv
           pkg-config
+          doxygen
+          graphviz
         ];
 
         CPATH = pkgs.lib.makeIncludePath [

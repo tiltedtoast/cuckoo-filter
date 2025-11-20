@@ -17,6 +17,12 @@ struct XorAltBucketPolicy {
 
     static constexpr char name[] = "XorAltBucketPolicy";
 
+    /**
+     * @brief Computes a 64-bit hash of the key.
+     * @tparam H Type of the key.
+     * @param key The key to hash.
+     * @return uint64_t The 64-bit hash value.
+     */
     template <typename H>
     static __host__ __device__ uint64_t hash64(const H& key) {
         return xxhash::xxhash64(key);
@@ -52,6 +58,14 @@ struct XorAltBucketPolicy {
         return {i1, i2, fp};
     }
 
+    /**
+     * @brief Computes the alternate bucket index using XOR.
+     *
+     * @param bucket Current bucket index.
+     * @param fp Fingerprint.
+     * @param numBuckets Total number of buckets (must be power of 2).
+     * @return size_t Alternate bucket index.
+     */
     static __host__ __device__ size_t
     getAlternateBucket(size_t bucket, TagType fp, size_t numBuckets) {
         return bucket ^ (hash64(fp) & (numBuckets - 1));
@@ -83,6 +97,12 @@ struct AddSubAltBucketPolicy {
 
     static constexpr char name[] = "AddSubAltBucketPolicy";
 
+    /**
+     * @brief Computes a 64-bit hash of the key.
+     * @tparam H Type of the key.
+     * @param key The key to hash.
+     * @return uint64_t The 64-bit hash value.
+     */
     template <typename H>
     static __host__ __device__ uint64_t hash64(const H& key) {
         return xxhash::xxhash64(key);

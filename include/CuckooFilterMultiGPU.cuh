@@ -35,11 +35,25 @@
         }                                                                                 \
     } while (0)
 
+/**
+ * @brief A multi-GPU implementation of the Cuckoo Filter.
+ *
+ * This class partitions keys across multiple GPUs.
+ * It handles data distribution, communication between GPUs using NCCL, and
+ * aggregates results.
+ *
+ * @tparam Config The configuration structure for the Cuckoo Filter.
+ */
 template <typename Config>
 class CuckooFilterMultiGPU {
    public:
     using T = typename Config::KeyType;
 
+    /**
+     * @brief Functor for partitioning keys across GPUs.
+     *
+     * Uses a hash function to assign each key to a specific GPU index.
+     */
     struct Partitioner {
         size_t numGPUs;
 
@@ -386,6 +400,15 @@ class CuckooFilterMultiGPU {
     }
 
    public:
+    /**
+     * @brief Constructs a new CuckooFilterMultiGPU.
+     *
+     * Initializes NCCL communicators, CUDA streams, and CuckooFilter instances
+     * on each available GPU.
+     *
+     * @param numGPUs Number of GPUs to use.
+     * @param capacity Total capacity of the distributed filter.
+     */
     CuckooFilterMultiGPU(size_t numGPUs, size_t capacity)
         : numGPUs(numGPUs), capacityPerGPU(static_cast<size_t>(SDIV(capacity, numGPUs) * 1.02)) {
         assert(numGPUs > 0 && "Number of GPUs must be at least 1");
@@ -406,6 +429,11 @@ class CuckooFilterMultiGPU {
         synchronizeAllGPUs();
     }
 
+    /**
+     * @brief Destroys the CuckooFilterMultiGPU.
+     *
+     * Cleans up NCCL communicators, streams, and filter instances.
+     */
     ~CuckooFilterMultiGPU() {
         parallelForGPUs([&](size_t i) {
             CUDA_CALL(cudaSetDevice(i));
@@ -468,10 +496,22 @@ class CuckooFilterMultiGPU {
         );
     }
 
+    /**
+     * @brief Calculates the global load factor.
+     * @return float Load factor (total occupied / total capacity).
+     */
     [[nodiscard]] float loadFactor() const {
         return static_cast<float>(totalOccupiedSlots()) / static_cast<float>(totalCapacity());
     }
 
+    /**
+     * @brief Executes a function in parallel across all GPUs.
+     *
+     * Spawns a thread for each GPU to run the provided function.
+     *
+     * @tparam Func Type of the function to execute.
+     * @param func The function to execute, taking the GPU index as an argument.
+     */
     template <typename Func>
     void parallelForGPUs(Func func) const {
         std::vector<std::thread> threads;
@@ -487,10 +527,17 @@ class CuckooFilterMultiGPU {
         }
     }
 
+    /**
+     * @brief Synchronizes all GPU streams used by this filter.
+     */
     void synchronizeAllGPUs() {
         parallelForGPUs([&](size_t i) { CUDA_CALL(cudaStreamSynchronize(streams[i])); });
     }
 
+    /**
+     * @brief Returns the total number of occupied slots across all GPUs.
+     * @return size_t Total occupied slots.
+     */
     [[nodiscard]] size_t totalOccupiedSlots() const {
         std::atomic<size_t> total(0);
         parallelForGPUs([&](size_t i) {
@@ -500,10 +547,17 @@ class CuckooFilterMultiGPU {
         return total.load();
     }
 
+    /**
+     * @brief Clears all filters on all GPUs.
+     */
     void clear() {
         parallelForGPUs([&](size_t i) { filters[i]->clear(); });
     }
 
+    /**
+     * @brief Returns the total capacity of the distributed filter.
+     * @return size_t Total capacity.
+     */
     [[nodiscard]] size_t totalCapacity() const {
         std::atomic<size_t> total(0);
         parallelForGPUs([&](size_t i) {

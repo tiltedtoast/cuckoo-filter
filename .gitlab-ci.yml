@@ -1,0 +1,40 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+docs:
+  stage: build
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache doxygen graphviz ttf-freefont meson python3 py3-pip
+    - pip3 install meson --break-system-packages
+  script:
+    - meson setup build
+    - meson compile -C build docs
+    - mkdir -p docs/html
+    - cp -r build/docs/html/* docs/html/
+  artifacts:
+    paths:
+      - docs/html
+    expire_in: 1 week
+  only:
+    - main
+    - master
+    - merge_requests
+
+pages:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - mv docs/html public
+  artifacts:
+    paths:
+      - public
+  only:
+    - main
+    - master
+  needs:
+    - docs

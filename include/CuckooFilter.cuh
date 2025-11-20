@@ -18,6 +18,19 @@
     #define CUCKOO_FILTER_HAS_THRUST 1
 #endif
 
+/**
+ * @brief Configuration structure for the Cuckoo Filter.
+ *
+ * This struct defines the compile-time parameters for the Cuckoo Filter,
+ * including key type, tag size, bucket size, and eviction policies.
+ *
+ * @tparam T The type of the keys stored in the filter.
+ * @tparam bitsPerTag_ Number of bits per fingerprint tag.
+ * @tparam maxEvictions_ Maximum number of evictions during insertion before failure.
+ * @tparam blockSize_ CUDA block size for kernels.
+ * @tparam bucketSize_ Number of slots per bucket.
+ * @tparam AltBucketPolicy_ Policy for calculating alternate bucket indices.
+ */
 template <
     typename T,
     size_t bitsPerTag_,
@@ -43,10 +56,16 @@ struct CuckooConfig {
 template <typename Config>
 class CuckooFilter;
 
+/**
+ * @brief Kernel for inserting keys into the filter.
+ */
 template <typename Config>
 __global__ void
 insertKernel(const typename Config::KeyType* keys, size_t n, CuckooFilter<Config>* filter);
 
+/**
+ * @brief Kernel for inserting pre-sorted keys into the filter.
+ */
 template <typename Config>
 __global__ void insertKernelSorted(
     const typename Config::KeyType* keys,
@@ -55,6 +74,9 @@ __global__ void insertKernelSorted(
     CuckooFilter<Config>* filter
 );
 
+/**
+ * @brief Kernel for computing packed tags for sorting.
+ */
 template <typename Config>
 __global__ void computePackedTagsKernel(
     const typename Config::KeyType* keys,
@@ -63,6 +85,9 @@ __global__ void computePackedTagsKernel(
     size_t numBuckets
 );
 
+/**
+ * @brief Kernel for checking existence of keys.
+ */
 template <typename Config>
 __global__ void containsKernel(
     const typename Config::KeyType* keys,
@@ -71,6 +96,9 @@ __global__ void containsKernel(
     CuckooFilter<Config>* filter
 );
 
+/**
+ * @brief Kernel for deleting keys.
+ */
 template <typename Config>
 __global__ void deleteKernel(
     const typename Config::KeyType* keys,
@@ -79,6 +107,15 @@ __global__ void deleteKernel(
     CuckooFilter<Config>* filter
 );
 
+/**
+ * @brief A CUDA-accelerated Cuckoo Filter implementation.
+ *
+ * This class implements a Cuckoo Filter using CUDA for high-throughput
+ * insertion, lookup, and deletion. It supports concurrent operations
+ * and uses atomic operations for thread safety within buckets.
+ *
+ * @tparam Config The configuration structure defining filter parameters.
+ */
 template <typename Config>
 struct CuckooFilter {
     using T = typename Config::KeyType;
@@ -277,6 +314,13 @@ struct CuckooFilter {
     CuckooFilter(const CuckooFilter&) = delete;
     CuckooFilter& operator=(const CuckooFilter&) = delete;
 
+    /**
+     * @brief Constructs a new Cuckoo Filter.
+     *
+     * Allocates device memory for buckets and occupancy counters.
+     *
+     * @param capacity Desired capacity (number of items) for the filter.
+     */
     explicit CuckooFilter(size_t capacity) : numBuckets(calculateNumBuckets(capacity)) {
         CUDA_CALL(cudaMalloc(&d_buckets, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMalloc(&d_numOccupied, sizeof(cuda::std::atomic<size_t>)));
@@ -284,6 +328,11 @@ struct CuckooFilter {
         clear();
     }
 
+    /**
+     * @brief Destroys the Cuckoo Filter.
+     *
+     * Frees allocated device memory.
+     */
     ~CuckooFilter() {
         if (d_buckets) {
             CUDA_CALL(cudaFree(d_buckets));
@@ -293,6 +342,14 @@ struct CuckooFilter {
         }
     }
 
+    /**
+     * @brief Inserts a batch of keys into the filter.
+     *
+     * @param d_keys Pointer to device memory containing keys to insert.
+     * @param n Number of keys to insert.
+     * @param stream CUDA stream to use for the operation.
+     * @return size_t Total number of occupied slots after insertion.
+     */
     size_t insertMany(const T* d_keys, const size_t n, cudaStream_t stream = {}) {
         size_t numBlocks = SDIV(n, blockSize);
         insertKernel<Config><<<numBlocks, blockSize, 0, stream>>>(d_keys, n, this);
@@ -308,6 +365,7 @@ struct CuckooFilter {
      *
      * @param d_keys Pointer to device memory array of keys to insert
      * @param n Number of keys to insert
+     * @param stream CUDA stream to use for the operation.
      * @return size_t Updated number of occupied slots in the filter
      */
     size_t insertManySorted(const T* d_keys, const size_t n, cudaStream_t stream = {}) {
@@ -345,6 +403,14 @@ struct CuckooFilter {
         return occupiedSlots();
     }
 
+    /**
+     * @brief Checks for the existence of a batch of keys.
+     *
+     * @param d_keys Pointer to device memory containing keys to check.
+     * @param n Number of keys to check.
+     * @param d_output Pointer to device memory to store results (true/false).
+     * @param stream CUDA stream to use for the operation.
+     */
     void containsMany(const T* d_keys, const size_t n, bool* d_output, cudaStream_t stream = {}) {
         size_t numBlocks = SDIV(n, blockSize);
         containsKernel<Config><<<numBlocks, blockSize, 0, stream>>>(d_keys, d_output, n, this);
@@ -378,14 +444,32 @@ struct CuckooFilter {
     }
 
 #ifdef CUCKOO_FILTER_HAS_THRUST
+    /**
+     * @brief Inserts keys from a Thrust device vector.
+     * @param d_keys Vector of keys to insert.
+     * @param stream CUDA stream.
+     * @return size_t Total number of occupied slots.
+     */
     size_t insertMany(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
         return insertMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), stream);
     }
 
+    /**
+     * @brief Inserts keys from a Thrust device vector, sorting them first.
+     * @param d_keys Vector of keys to insert.
+     * @param stream CUDA stream.
+     * @return size_t Total number of occupied slots.
+     */
     size_t insertManySorted(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
         return insertManySorted(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), stream);
     }
 
+    /**
+     * @brief Checks for existence of keys in a Thrust device vector.
+     * @param d_keys Vector of keys to check.
+     * @param d_output Vector to store results (bool). Resized if necessary.
+     * @param stream CUDA stream.
+     */
     void containsMany(
         const thrust::device_vector<T>& d_keys,
         thrust::device_vector<bool>& d_output,
@@ -402,6 +486,12 @@ struct CuckooFilter {
         );
     }
 
+    /**
+     * @brief Checks for existence of keys in a Thrust device vector (uint8_t output).
+     * @param d_keys Vector of keys to check.
+     * @param d_output Vector to store results (uint8_t). Resized if necessary.
+     * @param stream CUDA stream.
+     */
     void containsMany(
         const thrust::device_vector<T>& d_keys,
         thrust::device_vector<uint8_t>& d_output,
@@ -418,6 +508,13 @@ struct CuckooFilter {
         );
     }
 
+    /**
+     * @brief Deletes keys in a Thrust device vector.
+     * @param d_keys Vector of keys to delete.
+     * @param d_output Vector to store results (bool). Resized if necessary.
+     * @param stream CUDA stream.
+     * @return size_t Total number of occupied slots.
+     */
     size_t deleteMany(
         const thrust::device_vector<T>& d_keys,
         thrust::device_vector<bool>& d_output,
@@ -434,6 +531,13 @@ struct CuckooFilter {
         );
     }
 
+    /**
+     * @brief Deletes keys in a Thrust device vector (uint8_t output).
+     * @param d_keys Vector of keys to delete.
+     * @param d_output Vector to store results (uint8_t). Resized if necessary.
+     * @param stream CUDA stream.
+     * @return size_t Total number of occupied slots.
+     */
     size_t deleteMany(
         const thrust::device_vector<T>& d_keys,
         thrust::device_vector<uint8_t>& d_output,
@@ -450,21 +554,41 @@ struct CuckooFilter {
         );
     }
 
+    /**
+     * @brief Deletes keys in a Thrust device vector without outputting results.
+     * @param d_keys Vector of keys to delete.
+     * @param stream CUDA stream.
+     * @return size_t Total number of occupied slots.
+     */
     size_t deleteMany(const thrust::device_vector<T>& d_keys, cudaStream_t stream = {}) {
         return deleteMany(thrust::raw_pointer_cast(d_keys.data()), d_keys.size(), nullptr, stream);
     }
 #endif  // CUCKOO_FILTER_HAS_THRUST
 
+    /**
+     * @brief Clears the filter, removing all items.
+     */
     void clear() {
         CUDA_CALL(cudaMemset(d_buckets, 0, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMemset(d_numOccupied, 0, sizeof(cuda::std::atomic<size_t>)));
         h_numOccupied = 0;
     }
 
+    /**
+     * @brief Calculates the current load factor of the filter.
+     * @return float Load factor (occupied slots / total capacity).
+     */
     [[nodiscard]] float loadFactor() {
         return static_cast<float>(occupiedSlots()) / (numBuckets * bucketSize);
     }
 
+    /**
+     * @brief Returns the total number of occupied slots.
+     *
+     * Retrieves the value from the device counter.
+     *
+     * @return size_t Number of occupied slots.
+     */
     size_t occupiedSlots() {
         CUDA_CALL(
             cudaMemcpy(&h_numOccupied, d_numOccupied, sizeof(size_t), cudaMemcpyDeviceToHost)
@@ -472,18 +596,37 @@ struct CuckooFilter {
         return h_numOccupied;
     }
 
+    /**
+     * @brief Returns the total capacity of the filter.
+     * @return size_t Total number of slots.
+     */
     size_t capacity() {
         return numBuckets * bucketSize;
     }
 
+    /**
+     * @brief Returns the number of buckets in the filter.
+     * @return size_t Number of buckets.
+     */
     [[nodiscard]] size_t getNumBuckets() const {
         return numBuckets;
     }
 
+    /**
+     * @brief Returns the size of the filter in bytes.
+     * @return size_t Size in bytes.
+     */
     [[nodiscard]] size_t sizeInBytes() const {
         return numBuckets * sizeof(Bucket);
     }
 
+    /**
+     * @brief Counts occupied slots by iterating over all buckets on the host.
+     *
+     * This is a slow operation used for verification/debugging.
+     *
+     * @return size_t Actual number of occupied slots.
+     */
     size_t countOccupiedSlots() {
         std::vector<Bucket> h_buckets(numBuckets);
 
@@ -570,6 +713,15 @@ struct CuckooFilter {
         return false;
     }
 
+    /**
+     * @brief Attempts to insert a tag into a specific bucket.
+     *
+     * Scans the bucket for an empty slot and attempts to atomically place the tag.
+     *
+     * @param bucketIdx Index of the bucket.
+     * @param tag Tag to insert.
+     * @return true if insertion succeeded, false if the bucket is full.
+     */
     __device__ bool tryInsertAtBucket(size_t bucketIdx, TagType tag) {
         Bucket& bucket = d_buckets[bucketIdx];
         const uint32_t startIdx = tag & (bucketSize - 1);
@@ -708,6 +860,14 @@ struct CuckooFilter {
         return insertWithEviction(fp, startBucket);
     }
 
+    /**
+     * @brief Inserts a single key into the filter.
+     *
+     * Computes candidate buckets and attempts insertion, performing eviction if necessary.
+     *
+     * @param key The key to insert.
+     * @return true if insertion succeeded, false if the filter is too full (max evictions reached).
+     */
     __device__ bool insert(const T& key) {
         auto [i1, i2, fp] = getCandidateBuckets(key, numBuckets);
 
@@ -720,11 +880,23 @@ struct CuckooFilter {
         return insertWithEvictionBFS(fp, startBucket);
     }
 
+    /**
+     * @brief Checks if a key exists in the filter.
+     *
+     * @param key The key to check.
+     * @return true if the key is found, false otherwise.
+     */
     __device__ bool contains(const T& key) const {
         auto [i1, i2, fp] = getCandidateBuckets(key, numBuckets);
         return d_buckets[i1].contains(fp) || d_buckets[i2].contains(fp);
     }
 
+    /**
+     * @brief Removes a key from the filter.
+     *
+     * @param key The key to remove.
+     * @return true if the key was found and removed, false otherwise.
+     */
     __device__ bool remove(const T& key) {
         auto [i1, i2, fp] = getCandidateBuckets(key, numBuckets);
 

@@ -18,6 +18,27 @@ cuda_args = [
     '-gencode=arch=compute_75,code=compute_75',
 ]
 
+doxygen = find_program('doxygen', required: true)
+
+doc_out = meson.current_build_dir() / 'docs'
+doxyfile = configure_file(
+    input: 'Doxyfile.in',
+    output: 'Doxyfile',
+    configuration: {
+        'project_name': meson.project_name(),
+        'doc_out': doc_out,
+        'input_dir': meson.current_source_dir() / 'include',
+    },
+)
+
+custom_target(
+    'docs',
+    input: doxyfile,
+    output: 'docs.stamp',
+    command: [doxygen, doxyfile],
+    build_by_default: false,
+)
+
 includes = ['./include', './benchmark']
 deps = [
     dependency('CLI11', required: true),
