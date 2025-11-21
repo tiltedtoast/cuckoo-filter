@@ -15,6 +15,18 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def normalize_benchmark_name(name):
+    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
+    parts = name.split("/")
+    if len(parts) >= 2 and "Fixture" in parts[0]:
+        # Convert "CFFixture/Insert/..." to "CF_Insert/..."
+        fixture_name = parts[0].replace("Fixture", "")
+        bench_name = parts[1]
+        parts[0] = f"{fixture_name}_{bench_name}"
+        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
+    return "/".join(parts)
+
+
 def main():
     try:
         df = pd.read_csv(sys.stdin)
@@ -29,7 +41,7 @@ def main():
     bits_per_item_data = defaultdict(dict)
 
     for _, row in df.iterrows():
-        name = row["name"]
+        name = normalize_benchmark_name(row["name"])
         if "/" not in name:
             continue
 

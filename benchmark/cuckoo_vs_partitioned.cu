@@ -22,133 +22,136 @@
 namespace bm = benchmark;
 
 constexpr double TARGET_LOAD_FACTOR = 0.95;
-using Config = CuckooConfig<uint32_t, 16, 500, 128, 16>;
+using Config = CuckooConfig<uint64_t, 16, 500, 128, 16>;
 const size_t L2_CACHE_SIZE = getL2CacheSize();
 
 using CPUFilterParam = filters::cuckoo::Standard4<Config::bitsPerTag>;
-
 using CPUOptimParam = filters::parameter::PowerOfTwoMurmurScalar64PartitionedMT;
-
 using PartitionedCuckooFilter =
     filters::Filter<filters::FilterType::Cuckoo, CPUFilterParam, Config::bitsPerTag, CPUOptimParam>;
 
-static void GPU_CF_Insert(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
+using GPUCFFixture = CuckooFilterFixture<Config>;
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
+class PartitionedCFFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
 
-    size_t filterMemory = filter.sizeInBytes();
+   public:
+    static constexpr double TARGET_LOAD_FACTOR = 0.95;
 
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), TARGET_LOAD_FACTOR);
+        capacity = cap;
+        n = num;
+
+        keys = generateKeysCPU<uint64_t>(n);
+
+        s = static_cast<size_t>(100.0 / TARGET_LOAD_FACTOR);
+
+        size_t expectedSize =
+            (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
+        n_partitions = 1;
+
+        if (expectedSize > L2_CACHE_SIZE) {
+            size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
+            while (n_partitions < partitionsNeeded) {
+                n_partitions *= 2;
+            }
+        }
+
+        n_threads = 8;
+        n_tasks = 1;
+    }
+
+    void TearDown(const benchmark::State&) override {
+        keys.clear();
+    }
+
+    void setCounters(benchmark::State& state, size_t filterMemory) const {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    size_t capacity;
+    size_t n;
+    size_t s;
+    size_t n_partitions;
+    size_t n_threads;
+    size_t n_tasks;
+    std::vector<uint64_t> keys;
     Timer timer;
+};
 
+BENCHMARK_DEFINE_F(GPUCFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void GPU_CF_Query(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    adaptiveInsert(filter, d_keys);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
+BENCHMARK_DEFINE_F(GPUCFFixture, Query)(bm::State& state) {
+    adaptiveInsert(*filter, d_keys);
 
     for (auto _ : state) {
         timer.start();
-        filter.containsMany(d_keys, d_output);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void GPU_CF_InsertAndQuery(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(GPUCFFixture, InsertAndQuery)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        filter.containsMany(d_keys, d_output);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void GPU_CF_FPR(bm::State& state) {
-    using FPRConfig = CuckooConfig<uint32_t, 16, 500, 128, 4>;
+static void GPUCF_FPR(bm::State& state) {
+    Timer timer;
+    auto [capacity, n] = calculateCapacityAndSize(state.range(0), TARGET_LOAD_FACTOR);
 
-    auto [capacity, n] = calculateCapacityAndSize<FPRConfig>(state.range(0), TARGET_LOAD_FACTOR);
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPU(d_keys);
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys, UINT32_MAX);
-
-    CuckooFilter<Config> filter(capacity);
-    adaptiveInsert(filter, d_keys);
+    auto filter = std::make_unique<CuckooFilter<Config>>(capacity);
+    size_t filterMemory = filter->sizeInBytes();
+    adaptiveInsert(*filter, d_keys);
 
     size_t fprTestSize = std::min(n, size_t(1'000'000));
-    thrust::device_vector<uint32_t> d_neverInserted(fprTestSize);
+    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
     thrust::device_vector<uint8_t> d_output(fprTestSize);
 
-    thrust::transform(
-        thrust::counting_iterator<size_t>(0),
-        thrust::counting_iterator<size_t>(fprTestSize),
-        d_neverInserted.begin(),
-        [] __device__(size_t idx) {
-            thrust::default_random_engine rng(99999);
-            thrust::uniform_int_distribution<uint32_t> dist(
-                static_cast<uint32_t>(UINT32_MAX) + 1, UINT64_MAX
-            );
-            rng.discard(idx);
-            return dist(rng);
-        }
+    generateKeysGPURange(
+        d_neverInserted,
+        fprTestSize,
+        static_cast<uint64_t>(UINT32_MAX + 1),
+        static_cast<uint64_t>(UINT64_MAX)
     );
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
-        filter.containsMany(d_neverInserted, d_output);
+        filter->containsMany(d_neverInserted, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
@@ -172,27 +175,7 @@ static void GPU_CF_FPR(bm::State& state) {
     );
 }
 
-static void CPU_CF_Insert(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-    auto keys = generateKeysCPU<uint64_t>(n);
-
-    auto s = static_cast<size_t>(100.0 / TARGET_LOAD_FACTOR);
-
-    size_t expectedSize = (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
-    size_t n_partitions = 1;
-
-    if (expectedSize > L2_CACHE_SIZE) {
-        size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
-        while (n_partitions < partitionsNeeded) {
-            n_partitions *= 2;
-        }
-    }
-
-    size_t n_threads = 8;
-    size_t n_tasks = 1;
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(PartitionedCFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
         PartitionedCuckooFilter tempFilter(s, n_partitions, n_threads, n_tasks);
         auto constructKeys = keys;
@@ -209,35 +192,14 @@ static void CPU_CF_Insert(bm::State& state) {
     finalFilter.construct(keys.data(), keys.size());
     size_t filterMemory = finalFilter.size();
 
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state, filterMemory);
 }
 
-static void CPU_CF_Query(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    auto keys = generateKeysCPU<uint64_t>(n);
-
-    auto s = static_cast<size_t>(100.0 / TARGET_LOAD_FACTOR);
-
-    size_t expectedSize = (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
-    size_t n_partitions = 1;
-
-    if (expectedSize > L2_CACHE_SIZE) {
-        size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
-        while (n_partitions < partitionsNeeded) {
-            n_partitions *= 2;
-        }
-    }
-
-    size_t n_threads = 8;
-    size_t n_tasks = 1;
-
+BENCHMARK_DEFINE_F(PartitionedCFFixture, Query)(bm::State& state) {
     PartitionedCuckooFilter filter(s, n_partitions, n_threads, n_tasks);
     filter.construct(keys.data(), keys.size());
 
     size_t filterMemory = filter.size();
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
@@ -248,31 +210,10 @@ static void CPU_CF_Query(bm::State& state) {
         bm::DoNotOptimize(found);
     }
 
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state, filterMemory);
 }
 
-static void CPU_CF_InsertAndQuery(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    auto keys = generateKeysCPU<uint64_t>(n);
-
-    auto s = static_cast<size_t>(100.0 / TARGET_LOAD_FACTOR);
-
-    size_t expectedSize = (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
-    size_t n_partitions = 1;
-
-    if (expectedSize > L2_CACHE_SIZE) {
-        size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
-        while (n_partitions < partitionsNeeded) {
-            n_partitions *= 2;
-        }
-    }
-
-    size_t n_threads = 8;
-    size_t n_tasks = 1;
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(PartitionedCFFixture, InsertAndQuery)(bm::State& state) {
     for (auto _ : state) {
         PartitionedCuckooFilter filter(s, n_partitions, n_threads, n_tasks);
 
@@ -290,15 +231,16 @@ static void CPU_CF_InsertAndQuery(bm::State& state) {
     finalFilter.construct(keys.data(), keys.size());
     size_t filterMemory = finalFilter.size();
 
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state, filterMemory);
 }
 
-static void CPU_CF_FPR(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-    auto keys = generateKeysCPU<uint64_t>(n, 1, 1, UINT32_MAX / 2);
+static void PartitionedCF_FPR(bm::State& state) {
+    Timer timer;
+    auto [capacity, n] = calculateCapacityAndSize(state.range(0), TARGET_LOAD_FACTOR);
+
+    auto keys = generateKeysCPU<uint64_t>(n);
 
     auto s = static_cast<size_t>(100.0 / TARGET_LOAD_FACTOR);
-
     size_t expectedSize = (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
     size_t n_partitions = 1;
 
@@ -316,10 +258,7 @@ static void CPU_CF_FPR(bm::State& state) {
     filter.construct(keys.data(), keys.size());
 
     size_t fprTestSize = std::min(n, size_t(1'000'000));
-    auto neverInserted =
-        generateKeysCPU<uint64_t>(fprTestSize, 99999, UINT32_MAX / 2 + 1, UINT32_MAX);
-
-    Timer timer;
+    auto neverInserted = generateKeysCPU<uint64_t>(fprTestSize, 99999, UINT32_MAX + 1, UINT64_MAX);
 
     size_t falsePositives = 0;
     for (auto _ : state) {
@@ -352,72 +291,29 @@ static void CPU_CF_FPR(bm::State& state) {
     );
 }
 
-BENCHMARK(GPU_CF_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CPU_CF_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_BENCHMARK(GPUCFFixture, Insert);
+REGISTER_BENCHMARK(PartitionedCFFixture, Insert);
 
-BENCHMARK(GPU_CF_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CPU_CF_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_BENCHMARK(GPUCFFixture, Query);
+REGISTER_BENCHMARK(PartitionedCFFixture, Query);
 
-BENCHMARK(GPU_CF_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CPU_CF_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_BENCHMARK(GPUCFFixture, InsertAndQuery);
+REGISTER_BENCHMARK(PartitionedCFFixture, InsertAndQuery);
 
-BENCHMARK(GPU_CF_FPR)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CPU_CF_FPR)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_FUNCTION_BENCHMARK(GPUCF_FPR);
+REGISTER_FUNCTION_BENCHMARK(PartitionedCF_FPR);
 
-BENCHMARK_MAIN();
+int main(int argc, char** argv) {
+    ::benchmark::Initialize(&argc, argv);
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) {
+        return 1;
+    }
+
+    ::benchmark::RunSpecifiedBenchmarks();
+    ::benchmark::Shutdown();
+
+    fflush(stdout);
+    std::cout << std::flush;
+
+    std::_Exit(0);
+}

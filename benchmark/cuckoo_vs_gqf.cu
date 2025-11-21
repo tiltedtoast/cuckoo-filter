@@ -15,9 +15,8 @@
 
 namespace bm = benchmark;
 
-constexpr double TARGET_LOAD_FACTOR = 0.95;
 constexpr unsigned int QF_RBITS = 13;
-using Config = CuckooConfig<uint32_t, 16, 500, 128, 16, XorAltBucketPolicy>;
+using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
 
 size_t calcQuotientFilterMemory(unsigned int q, unsigned int r) {
     size_t tableBits = (1ULL << q) * (r + 3);
@@ -25,147 +24,136 @@ size_t calcQuotientFilterMemory(unsigned int q, unsigned int r) {
     return static_cast<size_t>(tableSlots * 1.1);  // 10% overflow allowance
 }
 
-void convertKeysToUint(
-    const thrust::device_vector<uint64_t>& d_keys_64,
-    thrust::device_vector<unsigned int>& d_keys_32
+using CFFixture = CuckooFilterFixture<Config>;
+
+void transformQFResults(
+    const thrust::device_vector<unsigned int>& d_results,
+    thrust::device_vector<unsigned int>& d_found
 ) {
     thrust::transform(
-        d_keys_64.begin(), d_keys_64.end(), d_keys_32.begin(), [] __device__(uint64_t key) {
-            return static_cast<unsigned int>(key & 0xFFFFFFFF);
+        d_results.begin(), d_results.end(), d_found.begin(), [] __device__(unsigned int val) {
+            return (val != UINT_MAX) ? 1u : 0u;
         }
     );
 }
 
-static void CF_Insert(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
+class QFFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
+   public:
+    static constexpr double TARGET_LOAD_FACTOR = 0.95;
 
-    size_t filterMemory = filter.sizeInBytes();
+    void SetUp(const benchmark::State& state) override {
+        q = static_cast<uint32_t>(std::log2(state.range(0)));
+        capacity = 1ULL << q;
+        n = capacity * TARGET_LOAD_FACTOR;
 
+        d_keys.resize(n);
+        d_results.resize(n);
+        generateKeysGPU(d_keys);
+
+        initFilterGPU(&qf, q, QF_RBITS);
+        filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
+    }
+
+    void TearDown(const benchmark::State&) override {
+        if (qf.table != nullptr) {
+            cudaFree(qf.table);
+            qf.table = nullptr;
+        }
+        d_keys.clear();
+        d_keys.shrink_to_fit();
+        d_results.clear();
+        d_results.shrink_to_fit();
+    }
+
+    void setCounters(benchmark::State& state) const {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    uint32_t q;
+    size_t capacity;
+    size_t n;
+    size_t filterMemory;
+    struct quotient_filter qf;
+    thrust::device_vector<uint32_t> d_keys;
+    thrust::device_vector<unsigned int> d_results;
     Timer timer;
+};
 
+BENCHMARK_DEFINE_F(CFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void CF_Query(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    adaptiveInsert(filter, d_keys);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
+BENCHMARK_DEFINE_F(CFFixture, Query)(bm::State& state) {
+    adaptiveInsert(*filter, d_keys);
 
     for (auto _ : state) {
         timer.start();
-        filter.containsMany(d_keys, d_output);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void CF_Delete(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(CFFixture, Delete)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
-        adaptiveInsert(filter, d_keys);
+        filter->clear();
+        adaptiveInsert(*filter, d_keys);
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t remaining = filter.deleteMany(d_keys, d_output);
+        size_t remaining = filter->deleteMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(remaining);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void CF_InsertAndQuery(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(CFFixture, InsertAndQuery)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        filter.containsMany(d_keys, d_output);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void CF_InsertQueryDelete(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(CFFixture, InsertQueryDelete)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        filter.containsMany(d_keys, d_output);
-        size_t remaining = filter.deleteMany(d_keys, d_output);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
+        filter->containsMany(d_keys, d_output);
+        size_t remaining = filter->deleteMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
@@ -173,45 +161,33 @@ static void CF_InsertQueryDelete(bm::State& state) {
         bm::DoNotOptimize(remaining);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
 static void CF_FPR(bm::State& state) {
-    using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
-    auto [capacity, n] = calculateCapacityAndSize<FPRConfig>(state.range(0), TARGET_LOAD_FACTOR);
+    Timer timer;
+    auto [capacity, n] = calculateCapacityAndSize(state.range(0), 0.95);
 
-    thrust::device_vector<uint64_t> d_keys(n);
-    generateKeysGPU(d_keys, static_cast<uint64_t>(UINT16_MAX));
+    thrust::device_vector<uint32_t> d_keys(n);
+    generateKeysGPU(d_keys);
 
-    CuckooFilter<FPRConfig> filter(capacity);
-    adaptiveInsert(filter, d_keys);
+    using FPRConfig = CuckooConfig<uint32_t, 16, 500, 128, 16, XorAltBucketPolicy>;
+
+    auto filter = std::make_unique<CuckooFilter<FPRConfig>>(capacity);
+    size_t filterMemory = filter->sizeInBytes();
+    adaptiveInsert(*filter, d_keys);
 
     size_t fprTestSize = std::min(n, size_t(1'000'000));
-    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
+    thrust::device_vector<uint32_t> d_neverInserted(fprTestSize);
     thrust::device_vector<uint8_t> d_output(fprTestSize);
 
-    thrust::transform(
-        thrust::counting_iterator<size_t>(0),
-        thrust::counting_iterator<size_t>(fprTestSize),
-        d_neverInserted.begin(),
-        [] __device__(size_t idx) {
-            thrust::default_random_engine rng(99999);
-            thrust::uniform_int_distribution<uint64_t> dist(
-                static_cast<uint64_t>(UINT32_MAX) + 1, UINT64_MAX
-            );
-            rng.discard(idx);
-            return dist(rng);
-        }
+    generateKeysGPURange(
+        d_neverInserted, fprTestSize, static_cast<uint32_t>(UINT16_MAX) + 1, UINT32_MAX
     );
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
-        filter.containsMany(d_neverInserted, d_output);
+        filter->containsMany(d_neverInserted, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
@@ -234,21 +210,8 @@ static void CF_FPR(bm::State& state) {
         static_cast<double>(filterMemory), bm::Counter::kDefaults, bm::Counter::kIs1024
     );
 }
-static void QF_BulkBuild(bm::State& state) {
-    auto q = static_cast<unsigned int>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
 
-    thrust::device_vector<unsigned int> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(QFFixture, BulkBuild)(bm::State& state) {
     for (auto _ : state) {
         cudaMemset(qf.table, 0, filterMemory);
         cudaDeviceSynchronize();
@@ -262,28 +225,9 @@ static void QF_BulkBuild(bm::State& state) {
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(time);
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_Insert(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(QFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
         cudaMemset(qf.table, 0, filterMemory);
         cudaDeviceSynchronize();
@@ -295,33 +239,12 @@ static void QF_Insert(bm::State& state) {
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(time);
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_Query_Sorted(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
+BENCHMARK_DEFINE_F(QFFixture, QuerySorted)(bm::State& state) {
     bulkBuildSegmentedLayouts(
         qf, static_cast<int>(n), thrust::raw_pointer_cast(d_keys.data()), false
     );
-
-    thrust::device_vector<unsigned int> d_results(n);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
@@ -337,33 +260,12 @@ static void QF_Query_Sorted(bm::State& state) {
         bm::DoNotOptimize(time);
         bm::DoNotOptimize(d_results.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_Query_Unsorted(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
+BENCHMARK_DEFINE_F(QFFixture, QueryUnsorted)(bm::State& state) {
     bulkBuildSegmentedLayouts(
         qf, static_cast<int>(n), thrust::raw_pointer_cast(d_keys.data()), false
     );
-
-    thrust::device_vector<unsigned int> d_results(n);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
@@ -379,28 +281,9 @@ static void QF_Query_Unsorted(bm::State& state) {
         bm::DoNotOptimize(time);
         bm::DoNotOptimize(d_results.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_Delete(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(QFFixture, Delete)(bm::State& state) {
     for (auto _ : state) {
         cudaMemset(qf.table, 0, filterMemory);
         bulkBuildSegmentedLayouts(
@@ -416,30 +299,9 @@ static void QF_Delete(bm::State& state) {
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(time);
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_BuildAndQuery(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
-    thrust::device_vector<unsigned int> d_results(n);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(QFFixture, BuildAndQuery)(bm::State& state) {
     for (auto _ : state) {
         cudaMemset(qf.table, 0, filterMemory);
         cudaDeviceSynchronize();
@@ -461,30 +323,9 @@ static void QF_BuildAndQuery(bm::State& state) {
         bm::DoNotOptimize(queryTime);
         bm::DoNotOptimize(d_results.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
-static void QF_BuildQueryDelete(bm::State& state) {
-    auto q = static_cast<uint32_t>(std::log2(state.range(0)));
-    size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    struct quotient_filter qf;
-    initFilterGPU(&qf, q, QF_RBITS);
-
-    thrust::device_vector<unsigned int> d_results(n);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(QFFixture, BuildQueryDelete)(bm::State& state) {
     for (auto _ : state) {
         cudaMemset(qf.table, 0, filterMemory);
         cudaDeviceSynchronize();
@@ -509,28 +350,22 @@ static void QF_BuildQueryDelete(bm::State& state) {
         bm::DoNotOptimize(deleteTime);
         bm::DoNotOptimize(d_results.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
-
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    setCounters(state);
 }
 
-// FIXME: This segfaults on the GPU for some reason
-// It also just kind of sucks that we have to use uint32_t for the keys because there aren't that
-// many of the
 static void QF_FPR(bm::State& state) {
+    Timer timer;
     auto q = static_cast<uint32_t>(std::log2(state.range(0)));
     size_t capacity = 1ULL << q;
-    size_t n = capacity * TARGET_LOAD_FACTOR;
+    size_t n = capacity * 0.95;
+    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
 
     thrust::device_vector<uint32_t> d_keys(n);
     generateKeysGPU<uint32_t>(d_keys, UINT16_MAX);
 
     struct quotient_filter qf;
     initFilterGPU(&qf, q, QF_RBITS);
-
+    cudaMemset(qf.table, 0, filterMemory);
     bulkBuildSegmentedLayouts(
         qf, static_cast<int>(n), thrust::raw_pointer_cast(d_keys.data()), false
     );
@@ -538,25 +373,11 @@ static void QF_FPR(bm::State& state) {
     size_t fprTestSize = std::min(n, size_t(1'000'000));
     thrust::device_vector<uint32_t> d_neverInserted(fprTestSize);
 
-    thrust::transform(
-        thrust::counting_iterator<size_t>(0),
-        thrust::counting_iterator<size_t>(fprTestSize),
-        d_neverInserted.begin(),
-        [] __device__(size_t idx) {
-            thrust::default_random_engine rng(99999);
-            thrust::uniform_int_distribution<uint32_t> dist(
-                static_cast<uint32_t>(UINT16_MAX) + 1, UINT32_MAX
-            );
-            rng.discard(idx);
-            return dist(rng);
-        }
+    generateKeysGPURange(
+        d_neverInserted, fprTestSize, static_cast<uint32_t>(UINT16_MAX) + 1, UINT32_MAX
     );
 
     thrust::device_vector<unsigned int> d_results(fprTestSize);
-
-    size_t filterMemory = calcQuotientFilterMemory(q, QF_RBITS);
-
-    Timer timer;
 
     for (auto _ : state) {
         timer.start();
@@ -574,11 +395,7 @@ static void QF_FPR(bm::State& state) {
     }
 
     thrust::device_vector<unsigned int> d_found(fprTestSize);
-    thrust::transform(
-        d_results.begin(), d_results.end(), d_found.begin(), [] __device__(unsigned int val) {
-            return (val != UINT_MAX) ? 1u : 0u;
-        }
-    );
+    transformQFResults(d_results, d_found);
 
     size_t falsePositives =
         thrust::reduce(d_found.begin(), d_found.end(), 0ULL, thrust::plus<size_t>());
@@ -596,128 +413,58 @@ static void QF_FPR(bm::State& state) {
         static_cast<double>(filterMemory), bm::Counter::kDefaults, bm::Counter::kIs1024
     );
 
-    if (qf.table != nullptr) {
-        cudaFree(qf.table);
-    }
+    cudaFree(qf.table);
 }
 
-BENCHMARK(CF_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+#define BENCHMARK_CONFIG_QF             \
+    ->RangeMultiplier(2)                \
+        ->Range(1 << 10, 1ULL << 18)    \
+        ->Unit(benchmark::kMillisecond) \
+        ->UseManualTime()               \
+        ->MinTime(0.5)                  \
+        ->Repetitions(5)                \
+        ->ReportAggregatesOnly(true)
 
-BENCHMARK(CF_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+#define REGISTER_CF_BENCHMARK(BenchName)       \
+    BENCHMARK_REGISTER_F(CFFixture, BenchName) \
+    BENCHMARK_CONFIG_QF
 
-BENCHMARK(CF_InsertQueryDelete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+#define REGISTER_QF_FIXTURE_BENCHMARK(BenchName) \
+    BENCHMARK_REGISTER_F(QFFixture, BenchName)   \
+    BENCHMARK_CONFIG_QF
 
-BENCHMARK(CF_FPR)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+#define REGISTER_FUNCTION_BENCHMARK_QF(FuncName) \
+    BENCHMARK(FuncName)                          \
+    BENCHMARK_CONFIG
 
-BENCHMARK(QF_BulkBuild)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(QF_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(QF_Query_Sorted)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(QF_Query_Unsorted)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_CF_BENCHMARK(Insert);
+REGISTER_CF_BENCHMARK(Query);
+REGISTER_CF_BENCHMARK(Delete);
+REGISTER_CF_BENCHMARK(InsertAndQuery);
+REGISTER_CF_BENCHMARK(InsertQueryDelete);
 
-BENCHMARK(QF_Delete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(QF_BuildAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(QF_BuildQueryDelete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_QF_FIXTURE_BENCHMARK(BulkBuild);
+REGISTER_QF_FIXTURE_BENCHMARK(Insert);
+REGISTER_QF_FIXTURE_BENCHMARK(QuerySorted);
+REGISTER_QF_FIXTURE_BENCHMARK(QueryUnsorted);
+REGISTER_QF_FIXTURE_BENCHMARK(Delete);
+REGISTER_QF_FIXTURE_BENCHMARK(BuildAndQuery);
+REGISTER_QF_FIXTURE_BENCHMARK(BuildQueryDelete);
 
-BENCHMARK(QF_FPR)
-    ->RangeMultiplier(2)
-    ->Range(1 << 10, 1ULL << 18)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_FUNCTION_BENCHMARK_QF(CF_FPR);
+REGISTER_FUNCTION_BENCHMARK_QF(QF_FPR);
 
-BENCHMARK_MAIN();
+int main(int argc, char** argv) {
+    ::benchmark::Initialize(&argc, argv);
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) {
+        return 1;
+    }
+
+    ::benchmark::RunSpecifiedBenchmarks();
+    ::benchmark::Shutdown();
+
+    fflush(stdout);
+    std::cout << std::flush;
+
+    std::_Exit(0);
+}

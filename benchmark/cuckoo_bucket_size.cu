@@ -10,514 +10,169 @@
 
 namespace bm = benchmark;
 
-constexpr double TARGET_LOAD_FACTOR = 0.95;
-
 template <size_t bucketSize>
-static void CF_Insert(bm::State& state) {
-    using Config = CuckooConfig<uint32_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
+class BucketSizeFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
+   public:
+    using Config = CuckooConfig<uint64_t, 16, 500, 128, bucketSize>;
+    static constexpr double TARGET_LOAD_FACTOR = 0.95;
 
-    size_t filterMemory = filter.sizeInBytes();
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), TARGET_LOAD_FACTOR);
+        capacity = cap;
+        n = num;
 
-    Timer timer;
+        d_keys.resize(n);
+        d_output.resize(n);
+        generateKeysGPU(d_keys);
 
-    for (auto _ : state) {
-        filter.clear();
-        cudaDeviceSynchronize();
-
-        timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(inserted);
+        filter = std::make_unique<CuckooFilter<Config>>(capacity);
+        filterMemory = filter->sizeInBytes();
     }
 
-    setCommonCounters(state, filterMemory, n);
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
-}
-
-template <size_t bucketSize>
-static void CF_Query(bm::State& state) {
-    using Config = CuckooConfig<uint32_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    adaptiveInsert(filter, d_keys);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
-    for (auto _ : state) {
-        timer.start();
-        filter.containsMany(d_keys, d_output);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(d_output.data().get());
+    void TearDown(const benchmark::State&) override {
+        filter.reset();
+        d_keys.clear();
+        d_output.clear();
     }
 
-    setCommonCounters(state, filterMemory, n);
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
-}
-
-template <size_t bucketSize>
-static void CF_Delete(bm::State& state) {
-    using Config = CuckooConfig<uint32_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
-    for (auto _ : state) {
-        filter.clear();
-        adaptiveInsert(filter, d_keys);
-        cudaDeviceSynchronize();
-
-        timer.start();
-        size_t remaining = filter.deleteMany(d_keys, d_output);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(remaining);
-        bm::DoNotOptimize(d_output.data().get());
+    void setCounters(benchmark::State& state) {
+        setCommonCounters(state, filterMemory, n);
+        state.counters["bucket_size"] = bm::Counter(bucketSize);
     }
 
-    setCommonCounters(state, filterMemory, n);
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
-}
-
-template <size_t bucketSize>
-static void CF_InsertAndQuery(bm::State& state) {
-    using Config = CuckooConfig<uint32_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
-
-    size_t filterMemory = filter.sizeInBytes();
-
+    size_t capacity;
+    size_t n;
+    size_t filterMemory;
+    thrust::device_vector<uint64_t> d_keys;
+    thrust::device_vector<uint8_t> d_output;
+    std::unique_ptr<CuckooFilter<Config>> filter;
     Timer timer;
+};
 
-    for (auto _ : state) {
-        filter.clear();
-        cudaDeviceSynchronize();
-
-        timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        filter.containsMany(d_keys, d_output);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(inserted);
-        bm::DoNotOptimize(d_output.data().get());
+#define DEFINE_BUCKET_SIZE_BENCHMARKS(BSize)                                     \
+    using BSFixture##BSize = BucketSizeFixture<BSize>;                           \
+                                                                                 \
+    BENCHMARK_DEFINE_F(BSFixture##BSize, Insert)(bm::State & state) {            \
+        for (auto _ : state) {                                                   \
+            filter->clear();                                                     \
+            cudaDeviceSynchronize();                                             \
+                                                                                 \
+            timer.start();                                                       \
+            size_t inserted = adaptiveInsert(*filter, d_keys);                   \
+            double elapsed = timer.stop();                                       \
+                                                                                 \
+            state.SetIterationTime(elapsed);                                     \
+            bm::DoNotOptimize(inserted);                                         \
+        }                                                                        \
+        setCounters(state);                                                      \
+    }                                                                            \
+                                                                                 \
+    BENCHMARK_DEFINE_F(BSFixture##BSize, Query)(bm::State & state) {             \
+        adaptiveInsert(*filter, d_keys);                                         \
+                                                                                 \
+        for (auto _ : state) {                                                   \
+            timer.start();                                                       \
+            filter->containsMany(d_keys, d_output);                              \
+            double elapsed = timer.stop();                                       \
+                                                                                 \
+            state.SetIterationTime(elapsed);                                     \
+            bm::DoNotOptimize(d_output.data().get());                            \
+        }                                                                        \
+        setCounters(state);                                                      \
+    }                                                                            \
+                                                                                 \
+    BENCHMARK_DEFINE_F(BSFixture##BSize, Delete)(bm::State & state) {            \
+        for (auto _ : state) {                                                   \
+            filter->clear();                                                     \
+            adaptiveInsert(*filter, d_keys);                                     \
+            cudaDeviceSynchronize();                                             \
+                                                                                 \
+            timer.start();                                                       \
+            size_t remaining = filter->deleteMany(d_keys, d_output);             \
+            double elapsed = timer.stop();                                       \
+                                                                                 \
+            state.SetIterationTime(elapsed);                                     \
+            bm::DoNotOptimize(remaining);                                        \
+            bm::DoNotOptimize(d_output.data().get());                            \
+        }                                                                        \
+        setCounters(state);                                                      \
+    }                                                                            \
+                                                                                 \
+    BENCHMARK_DEFINE_F(BSFixture##BSize, InsertAndQuery)(bm::State & state) {    \
+        for (auto _ : state) {                                                   \
+            filter->clear();                                                     \
+            cudaDeviceSynchronize();                                             \
+                                                                                 \
+            timer.start();                                                       \
+            size_t inserted = adaptiveInsert(*filter, d_keys);                   \
+            filter->containsMany(d_keys, d_output);                              \
+            double elapsed = timer.stop();                                       \
+                                                                                 \
+            state.SetIterationTime(elapsed);                                     \
+            bm::DoNotOptimize(inserted);                                         \
+            bm::DoNotOptimize(d_output.data().get());                            \
+        }                                                                        \
+        setCounters(state);                                                      \
+    }                                                                            \
+                                                                                 \
+    BENCHMARK_DEFINE_F(BSFixture##BSize, InsertQueryDelete)(bm::State & state) { \
+        for (auto _ : state) {                                                   \
+            filter->clear();                                                     \
+            cudaDeviceSynchronize();                                             \
+                                                                                 \
+            timer.start();                                                       \
+            size_t inserted = adaptiveInsert(*filter, d_keys);                   \
+            filter->containsMany(d_keys, d_output);                              \
+            size_t remaining = filter->deleteMany(d_keys, d_output);             \
+            double elapsed = timer.stop();                                       \
+                                                                                 \
+            state.SetIterationTime(elapsed);                                     \
+            bm::DoNotOptimize(inserted);                                         \
+            bm::DoNotOptimize(remaining);                                        \
+            bm::DoNotOptimize(d_output.data().get());                            \
+        }                                                                        \
+        setCounters(state);                                                      \
     }
 
-    setCommonCounters(state, filterMemory, n);
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
-}
+DEFINE_BUCKET_SIZE_BENCHMARKS(4)
+DEFINE_BUCKET_SIZE_BENCHMARKS(8)
+DEFINE_BUCKET_SIZE_BENCHMARKS(16)
+DEFINE_BUCKET_SIZE_BENCHMARKS(32)
+DEFINE_BUCKET_SIZE_BENCHMARKS(64)
+DEFINE_BUCKET_SIZE_BENCHMARKS(128)
 
-template <size_t bucketSize>
-static void CF_InsertQueryDelete(bm::State& state) {
-    using Config = CuckooConfig<uint32_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
+#define REGISTER_BUCKET_BENCHMARK(BSize, BenchName)   \
+    BENCHMARK_REGISTER_F(BSFixture##BSize, BenchName) \
+    BENCHMARK_CONFIG
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
+#define REGISTER_ALL_FOR_BUCKET_SIZE(BSize)           \
+    REGISTER_BUCKET_BENCHMARK(BSize, Insert);         \
+    REGISTER_BUCKET_BENCHMARK(BSize, Query);          \
+    REGISTER_BUCKET_BENCHMARK(BSize, Delete);         \
+    REGISTER_BUCKET_BENCHMARK(BSize, InsertAndQuery); \
+    REGISTER_BUCKET_BENCHMARK(BSize, InsertQueryDelete);
 
-    size_t filterMemory = filter.sizeInBytes();
+REGISTER_ALL_FOR_BUCKET_SIZE(4);
+REGISTER_ALL_FOR_BUCKET_SIZE(8);
+REGISTER_ALL_FOR_BUCKET_SIZE(16);
+REGISTER_ALL_FOR_BUCKET_SIZE(32);
+REGISTER_ALL_FOR_BUCKET_SIZE(64);
+REGISTER_ALL_FOR_BUCKET_SIZE(128);
 
-    Timer timer;
-
-    for (auto _ : state) {
-        filter.clear();
-        cudaDeviceSynchronize();
-
-        timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
-        filter.containsMany(d_keys, d_output);
-        size_t remaining = filter.deleteMany(d_keys, d_output);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(inserted);
-        bm::DoNotOptimize(remaining);
-        bm::DoNotOptimize(d_output.data().get());
+int main(int argc, char** argv) {
+    ::benchmark::Initialize(&argc, argv);
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) {
+        return 1;
     }
 
-    setCommonCounters(state, filterMemory, n);
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
+    ::benchmark::RunSpecifiedBenchmarks();
+    ::benchmark::Shutdown();
+
+    fflush(stdout);
+    std::cout << std::flush;
+
+    std::_Exit(0);
 }
-
-template <size_t bucketSize>
-static void CF_FPR(bm::State& state) {
-    using FPRConfig = CuckooConfig<uint64_t, 16, 500, 128, bucketSize>;
-    auto [capacity, n] = calculateCapacityAndSize<FPRConfig>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint64_t> d_keys(n);
-    generateKeysGPU<uint64_t>(d_keys, UINT32_MAX);
-
-    CuckooFilter<FPRConfig> filter(capacity);
-    adaptiveInsert(filter, d_keys);
-
-    size_t fprTestSize = std::min(n, size_t(1'000'000));
-    thrust::device_vector<uint64_t> d_neverInserted(fprTestSize);
-    thrust::device_vector<uint8_t> d_output(fprTestSize);
-
-    thrust::transform(
-        thrust::counting_iterator<size_t>(0),
-        thrust::counting_iterator<size_t>(fprTestSize),
-        d_neverInserted.begin(),
-        [] __device__(size_t idx) {
-            thrust::default_random_engine rng(99999);
-            thrust::uniform_int_distribution<uint64_t> dist(UINT32_MAX + 1, UINT64_MAX);
-            rng.discard(idx);
-            return dist(rng);
-        }
-    );
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
-    for (auto _ : state) {
-        timer.start();
-        filter.containsMany(d_neverInserted, d_output);
-        double elapsed = timer.stop();
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(d_output.data().get());
-    }
-
-    size_t falsePositives =
-        thrust::reduce(d_output.begin(), d_output.end(), 0ULL, cuda::std::plus<size_t>());
-    double fpr = static_cast<double>(falsePositives) / static_cast<double>(fprTestSize);
-
-    state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * fprTestSize));
-    state.counters["fpr_percentage"] = bm::Counter(fpr * 100);
-    state.counters["false_positives"] = bm::Counter(static_cast<double>(falsePositives));
-    state.counters["bits_per_item"] = bm::Counter(
-        static_cast<double>(filterMemory * 8) / static_cast<double>(n),
-        bm::Counter::kDefaults,
-        bm::Counter::kIs1024
-    );
-    state.counters["memory_bytes"] = bm::Counter(
-        static_cast<double>(filterMemory), bm::Counter::kDefaults, bm::Counter::kIs1024
-    );
-    state.counters["bucket_size"] = bm::Counter(bucketSize);
-}
-
-BENCHMARK(CF_Insert<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Insert<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Insert<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Insert<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Insert<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Insert<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK(CF_Query<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Query<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK(CF_Delete<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_Delete<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK(CF_InsertAndQuery<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertAndQuery<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertAndQuery<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertAndQuery<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertAndQuery<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertAndQuery<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK(CF_InsertQueryDelete<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertQueryDelete<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertQueryDelete<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertQueryDelete<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertQueryDelete<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_InsertQueryDelete<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK(CF_FPR<4>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_FPR<8>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_FPR<16>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_FPR<32>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_FPR<64>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(CF_FPR<128>)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1ULL << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-
-BENCHMARK_MAIN();

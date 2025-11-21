@@ -32,7 +32,6 @@ class Timer {
     std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
 };
 
-template <typename ConfigType>
 std::pair<size_t, size_t> calculateCapacityAndSize(size_t capacity, double loadFactor) {
     return {capacity, capacity * loadFactor};
 }
@@ -65,6 +64,27 @@ inline size_t adaptiveInsert(
     }
 }
 
+template <typename T>
+void generateKeysGPURange(
+    thrust::device_vector<T>& d_output,
+    size_t count,
+    T min,
+    T max,
+    unsigned int seed = 99999
+) {
+    thrust::transform(
+        thrust::counting_iterator<size_t>(0),
+        thrust::counting_iterator<size_t>(count),
+        d_output.begin(),
+        [=] __device__(size_t idx) {
+            thrust::default_random_engine rng(seed);
+            thrust::uniform_int_distribution<T> dist(min, max);
+            rng.discard(idx);
+            return dist(rng);
+        }
+    );
+}
+
 /**
  * @brief Generate random keys on the GPU
  *
@@ -79,18 +99,7 @@ void generateKeysGPU(
     T max = std::numeric_limits<T>::max(),
     unsigned int seed = 42
 ) {
-    size_t n = d_keys.size();
-    thrust::transform(
-        thrust::counting_iterator<size_t>(0),
-        thrust::counting_iterator<size_t>(n),
-        d_keys.begin(),
-        [max, seed] __device__(size_t idx) {
-            thrust::default_random_engine rng(seed);
-            thrust::uniform_int_distribution<T> dist(1, max);
-            rng.discard(idx);
-            return dist(rng);
-        }
-    );
+    generateKeysGPURange(d_keys, d_keys.size(), static_cast<T>(1), max, seed);
 }
 
 template <typename T>
@@ -151,3 +160,62 @@ void setCommonCounters(benchmark::State& state, size_t memory, size_t n) {
     state.counters["fpr_percentage"] = 0.0;
     state.counters["false_positives"] = 0.0;
 }
+
+template <typename ConfigType, double loadFactor = 0.95>
+class CuckooFilterFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
+
+   public:
+    using KeyType = typename ConfigType::KeyType;
+
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), loadFactor);
+        capacity = cap;
+        n = num;
+
+        d_keys.resize(n);
+        d_output.resize(n);
+        generateKeysGPU(d_keys);
+
+        filter = std::make_unique<CuckooFilter<ConfigType>>(capacity);
+        filterMemory = filter->sizeInBytes();
+    }
+
+    void TearDown(const benchmark::State&) override {
+        filter.reset();
+        d_keys.clear();
+        d_output.clear();
+        d_keys.shrink_to_fit();
+        d_output.shrink_to_fit();
+    }
+
+    void setCounters(benchmark::State& state) {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    size_t capacity;
+    size_t n;
+    size_t filterMemory;
+    thrust::device_vector<KeyType> d_keys;
+    thrust::device_vector<uint8_t> d_output;
+    std::unique_ptr<CuckooFilter<ConfigType>> filter;
+    Timer timer;
+};
+
+#define BENCHMARK_CONFIG                \
+    ->RangeMultiplier(2)                \
+        ->Range(1 << 16, 1ULL << 28)    \
+        ->Unit(benchmark::kMillisecond) \
+        ->UseManualTime()               \
+        ->MinTime(0.5)                  \
+        ->Repetitions(5)                \
+        ->ReportAggregatesOnly(true)
+
+#define REGISTER_BENCHMARK(FixtureName, BenchName) \
+    BENCHMARK_REGISTER_F(FixtureName, BenchName)   \
+    BENCHMARK_CONFIG
+
+#define REGISTER_FUNCTION_BENCHMARK(FuncName) \
+    BENCHMARK(FuncName)                       \
+    BENCHMARK_CONFIG

@@ -39,7 +39,7 @@
           nccl.out
         ];
 
-        packages = with pkgs; [
+        nativeBuildInputs = with pkgs; [
           llvm.clang-tools
           llvm.lldb
           meson

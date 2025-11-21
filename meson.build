@@ -23,7 +23,6 @@ cli11_dep = subproject('cli11').get_variable('CLI11_dep')
 includes = ['./include']
 deps = [cli11_dep]
 
-
 executable(
     'cuckoo-filter-ipc',
     './src/ipc_main.cu',

@@ -16,16 +16,30 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+
+def normalize_benchmark_name(name):
+    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
+    parts = name.split("/")
+    if len(parts) >= 2 and "Fixture" in parts[0]:
+        # Convert "BucketSizeFixture/Insert<4>/..." to "BucketSize_Insert<4>/..."
+        fixture_name = parts[0].replace("Fixture", "")
+        bench_name = parts[1]
+        parts[0] = f"{fixture_name}_{bench_name}"
+        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
+    return "/".join(parts)
+
+
 df = pd.read_csv(sys.stdin)
 
-# Filter for median records only
+# Filter for median records only and normalize names
 df = df[df["name"].str.endswith("_median")]
+df["name"] = df["name"].apply(normalize_benchmark_name)
 
 
 def parse_benchmark_name(name):
-    # Pattern: CF_<Operation><<BucketSize>>/<InputSize>/min_time:<MinTime>/repeats:<Repetitions>_median
+    # Pattern: BS<BucketSize>_<Operation>/<InputSize>/min_time:<MinTime>/repeats:<Repetitions>_<stat>
     # Extract the operation and input size
-    match = re.match(r"CF_(\w+)<\d+>/(\d+)", name)
+    match = re.match(r"BS\d+_(\w+)/(\d+)", name)
     if match:
         operation = match.group(1)
         input_size = int(match.group(2))

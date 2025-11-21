@@ -12,12 +12,13 @@
 
 namespace bm = benchmark;
 
-constexpr double TARGET_LOAD_FACTOR = 0.95;
-using Config = CuckooConfig<uint32_t, 16, 500, 128, 16, XorAltBucketPolicy>;
+using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
 
 static constexpr char SERVER_NAME[] = "benchmark_server";
 static pid_t g_serverPid = -1;
 static size_t g_currentServerCapacity = 0;
+
+using LocalCFFixture = CuckooFilterFixture<Config>;
 
 static void startIPCServerProcess(size_t capacity) {
     if (g_serverPid > 0 && g_currentServerCapacity == capacity) {
@@ -62,336 +63,204 @@ static void cleanupIPCServer() {
     shm_unlink(("/cuckoo_filter_" + std::string(SERVER_NAME)).c_str());
 }
 
-static void Local_Insert(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
+class IPCCFFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
 
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
+   public:
+    static constexpr double TARGET_LOAD_FACTOR = 0.95;
 
-    size_t filterMemory = filter.sizeInBytes();
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), TARGET_LOAD_FACTOR);
+        capacity = cap;
+        n = num;
 
+        startIPCServerProcess(capacity);
+
+        d_keys.resize(n);
+        d_output.resize(n);
+        generateKeysGPU(d_keys);
+
+        client = std::make_unique<CuckooFilterIPCClientThrust<Config>>(SERVER_NAME);
+
+        size_t requiredBuckets = std::ceil(static_cast<double>(capacity) / Config::bucketSize);
+        size_t numBuckets = 1ULL << static_cast<size_t>(std::ceil(std::log2(requiredBuckets)));
+
+        constexpr size_t tagsPerWord = sizeof(uint64_t) * 8 / Config::bitsPerTag;
+        constexpr size_t wordCount = Config::bucketSize / tagsPerWord;
+        filterMemory = numBuckets * wordCount * sizeof(uint64_t);
+    }
+
+    void TearDown(const benchmark::State&) override {
+        client.reset();
+        d_keys.clear();
+        d_output.clear();
+    }
+
+    void setCounters(benchmark::State& state) const {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    size_t capacity;
+    size_t n;
+    size_t filterMemory;
+    thrust::device_vector<uint64_t> d_keys;
+    thrust::device_vector<uint8_t> d_output;
+    std::unique_ptr<CuckooFilterIPCClientThrust<Config>> client;
     Timer timer;
+};
 
+BENCHMARK_DEFINE_F(LocalCFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = adaptiveInsert(filter, d_keys);
+        size_t inserted = adaptiveInsert(*filter, d_keys);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void IPC_Insert(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    startIPCServerProcess(capacity);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-
-    CuckooFilterIPCClientThrust<Config> client(SERVER_NAME);
-
-    size_t requiredBuckets = std::ceil(static_cast<double>(capacity) / Config::bucketSize);
-    size_t numBuckets = 1ULL << static_cast<size_t>(std::ceil(std::log2(requiredBuckets)));
-
-    constexpr size_t tagsPerWord = sizeof(uint64_t) * 8 / Config::bitsPerTag;
-    constexpr size_t wordCount = Config::bucketSize / tagsPerWord;
-    size_t filterMemory = numBuckets * wordCount * sizeof(uint64_t);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(IPCCFFixture, Insert)(bm::State& state) {
     for (auto _ : state) {
-        client.clear();
+        client->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = client.insertMany(d_keys);
+        size_t inserted = client->insertMany(d_keys);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void Local_Query(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    adaptiveInsert(filter, d_keys);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
+BENCHMARK_DEFINE_F(LocalCFFixture, Query)(bm::State& state) {
+    adaptiveInsert(*filter, d_keys);
 
     for (auto _ : state) {
         timer.start();
-        filter.containsMany(d_keys, d_output);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void IPC_Query(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    startIPCServerProcess(capacity);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    CuckooFilterIPCClientThrust<Config> client(SERVER_NAME);
-    client.clear();
-    client.insertMany(d_keys);
-
-    size_t requiredBuckets = std::ceil(static_cast<double>(capacity) / Config::bucketSize);
-    size_t numBuckets = 1ULL << static_cast<size_t>(std::ceil(std::log2(requiredBuckets)));
-
-    constexpr size_t tagsPerWord = sizeof(uint64_t) * 8 / Config::bitsPerTag;
-    constexpr size_t wordCount = Config::bucketSize / tagsPerWord;
-    size_t filterMemory = numBuckets * wordCount * sizeof(uint64_t);
-
-    Timer timer;
+BENCHMARK_DEFINE_F(IPCCFFixture, Query)(bm::State& state) {
+    client->clear();
+    client->insertMany(d_keys);
 
     for (auto _ : state) {
         timer.start();
-        client.containsMany(d_keys, d_output);
+        client->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void Local_Delete(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    CuckooFilter<Config> filter(capacity);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(LocalCFFixture, Delete)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
-        filter.insertMany(d_keys);
+        filter->clear();
+        filter->insertMany(d_keys);
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t remaining = filter.deleteMany(d_keys, d_output);
+        size_t remaining = filter->deleteMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(remaining);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void IPC_Delete(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    startIPCServerProcess(capacity);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    CuckooFilterIPCClientThrust<Config> client(SERVER_NAME);
-
-    size_t requiredBuckets = std::ceil(static_cast<double>(capacity) / Config::bucketSize);
-    size_t numBuckets = 1ULL << static_cast<size_t>(std::ceil(std::log2(requiredBuckets)));
-
-    constexpr size_t tagsPerWord = sizeof(uint64_t) * 8 / Config::bitsPerTag;
-    constexpr size_t wordCount = Config::bucketSize / tagsPerWord;
-    size_t filterMemory = numBuckets * wordCount * sizeof(uint64_t);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(IPCCFFixture, Delete)(bm::State& state) {
     for (auto _ : state) {
-        client.clear();
-        client.insertMany(d_keys);
+        client->clear();
+        client->insertMany(d_keys);
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t remaining = client.deleteMany(d_keys, d_output);
+        size_t remaining = client->deleteMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(remaining);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void Local_InsertAndQuery(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-    CuckooFilter<Config> filter(capacity);
-
-    size_t filterMemory = filter.sizeInBytes();
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(LocalCFFixture, InsertAndQuery)(bm::State& state) {
     for (auto _ : state) {
-        filter.clear();
+        filter->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = filter.insertMany(d_keys);
-        filter.containsMany(d_keys, d_output);
+        size_t inserted = filter->insertMany(d_keys);
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-static void IPC_InsertAndQuery(bm::State& state) {
-    auto [capacity, n] = calculateCapacityAndSize<Config>(state.range(0), TARGET_LOAD_FACTOR);
-
-    startIPCServerProcess(capacity);
-
-    thrust::device_vector<uint32_t> d_keys(n);
-    generateKeysGPU(d_keys);
-    thrust::device_vector<uint8_t> d_output(n);
-
-    CuckooFilterIPCClientThrust<Config> client(SERVER_NAME);
-
-    size_t requiredBuckets = std::ceil(static_cast<double>(capacity) / Config::bucketSize);
-    size_t numBuckets = 1ULL << static_cast<size_t>(std::ceil(std::log2(requiredBuckets)));
-
-    constexpr size_t tagsPerWord = sizeof(uint64_t) * 8 / Config::bitsPerTag;
-    constexpr size_t wordCount = Config::bucketSize / tagsPerWord;
-    size_t filterMemory = numBuckets * wordCount * sizeof(uint64_t);
-
-    Timer timer;
-
+BENCHMARK_DEFINE_F(IPCCFFixture, InsertAndQuery)(bm::State& state) {
     for (auto _ : state) {
-        client.clear();
+        client->clear();
         cudaDeviceSynchronize();
 
         timer.start();
-        size_t inserted = client.insertMany(d_keys);
-        client.containsMany(d_keys, d_output);
+        size_t inserted = client->insertMany(d_keys);
+        client->containsMany(d_keys, d_output);
         double elapsed = timer.stop();
 
         state.SetIterationTime(elapsed);
         bm::DoNotOptimize(inserted);
         bm::DoNotOptimize(d_output.data().get());
     }
-
-    setCommonCounters(state, filterMemory, n);
+    setCounters(state);
 }
 
-BENCHMARK(Local_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(IPC_Insert)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(Local_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(IPC_Query)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(Local_Delete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-BENCHMARK(IPC_Delete)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_BENCHMARK(LocalCFFixture, Insert);
+REGISTER_BENCHMARK(IPCCFFixture, Insert);
 
-BENCHMARK(Local_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
+REGISTER_BENCHMARK(LocalCFFixture, Query);
+REGISTER_BENCHMARK(IPCCFFixture, Query);
 
-// clang-format off
-BENCHMARK(IPC_InsertAndQuery)
-    ->RangeMultiplier(2)
-    ->Range(1 << 16, 1 << 28)
-    ->Unit(bm::kMillisecond)
-    ->UseManualTime()
-    ->MinTime(0.5)
-    ->Repetitions(5)
-    ->ReportAggregatesOnly(true);
-// clang-format on
+REGISTER_BENCHMARK(LocalCFFixture, Delete);
+REGISTER_BENCHMARK(IPCCFFixture, Delete);
+
+REGISTER_BENCHMARK(LocalCFFixture, InsertAndQuery);
+REGISTER_BENCHMARK(IPCCFFixture, InsertAndQuery);
 
 int main(int argc, char** argv) {
-    bm::Initialize(&argc, argv);
-    if (bm::ReportUnrecognizedArguments(argc, argv)) {
+    ::benchmark::Initialize(&argc, argv);
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) {
         return 1;
     }
-    bm::RunSpecifiedBenchmarks();
 
+    ::benchmark::RunSpecifiedBenchmarks();
     cleanupIPCServer();
+    ::benchmark::Shutdown();
 
-    bm::Shutdown();
-    return 0;
+    fflush(stdout);
+    std::cout << std::flush;
+
+    std::_Exit(0);
 }

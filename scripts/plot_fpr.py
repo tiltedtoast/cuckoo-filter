@@ -14,6 +14,18 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def normalize_benchmark_name(name: str):
+    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
+    parts = name.split("/")
+    if len(parts) >= 2 and "Fixture" in parts[0]:
+        # Convert "CFFixture/FPR/..." to "CF_FPR/..."
+        fixture_name = parts[0].replace("Fixture", "")
+        bench_name = parts[1]
+        parts[0] = f"{fixture_name}_{bench_name}"
+        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
+    return "/".join(parts)
+
+
 def main():
     try:
         df = pd.read_csv(sys.stdin)
@@ -28,7 +40,7 @@ def main():
     false_positives_data = defaultdict(dict)
 
     for _, row in df.iterrows():
-        name = row["name"]
+        name = normalize_benchmark_name(row["name"])
         if "/" not in name:
             continue
 
@@ -89,6 +101,7 @@ def main():
         ax1.set_title("False Positive Rate Percentage", fontsize=14)
 
     if false_positives_data:
+
         def get_last_fp_value(bench_name):
             sizes = sorted(false_positives_data[bench_name].keys())
             if sizes:
