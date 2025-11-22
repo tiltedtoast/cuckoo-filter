@@ -31,20 +31,8 @@ class MultiGPUFixture_ : public benchmark::Fixture {
 
         h_keys.resize(n);
         thrust::device_vector<KeyType> d_temp(n);
-
-        thrust::transform(
-            thrust::counting_iterator<size_t>(0),
-            thrust::counting_iterator<size_t>(n),
-            h_keys.begin(),
-            [=] (size_t idx) {
-                thrust::default_random_engine rng(42);
-                thrust::uniform_int_distribution<KeyType> dist(
-                    1, std::numeric_limits<KeyType>::max()
-                );
-                rng.discard(idx);
-                return dist(rng);
-            }
-        );
+        generateKeysGPU(d_temp);
+        thrust::copy(d_temp.begin(), d_temp.end(), h_keys.begin());
 
         h_output.resize(n);
 
