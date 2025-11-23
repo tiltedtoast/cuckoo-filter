@@ -158,4 +158,19 @@ int main(int argc, char** argv) {
     std::cout << std::format(
         "After deletion, {} / {} deleted items still found\n", stillFound, deleteCount
     );
+
+    size_t nonDeletedCount = n - deleteCount;
+    thrust::device_vector<uint64_t> d_nonDeletedKeys(
+        d_input.begin() + static_cast<ptrdiff_t>(deleteCount), d_input.end()
+    );
+    thrust::device_vector<uint8_t> d_nonDeletedOutput(nonDeletedCount);
+
+    filter.containsMany(d_nonDeletedKeys, d_nonDeletedOutput);
+    thrust::host_vector<uint8_t> nonDeletedOutput = d_nonDeletedOutput;
+    size_t nonDeletedFound = countOnes(
+        reinterpret_cast<bool*>(thrust::raw_pointer_cast(nonDeletedOutput.data())), nonDeletedCount
+    );
+    std::cout << std::format(
+        "Non-deleted keys still found: {} / {}\n", nonDeletedFound, nonDeletedCount
+    );
 }

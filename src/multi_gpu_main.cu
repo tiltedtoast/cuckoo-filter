@@ -169,7 +169,21 @@ int main(int argc, char** argv) {
     filter.containsMany(h_deleteKeys, h_deleteOutput);
     size_t stillFound = countOnes(h_deleteOutput.data(), deleteCount);
     std::cout << std::format(
-        "After deletion, {} / {} deleted items still found\n\n", stillFound, deleteCount
+        "After deletion, {} / {} deleted items still found\n", stillFound, deleteCount
+    );
+
+    size_t nonDeletedCount = n - deleteCount;
+    thrust::host_vector<uint64_t> h_nonDeletedKeys(nonDeletedCount);
+    thrust::host_vector<bool> h_nonDeletedOutput(nonDeletedCount);
+
+    for (size_t i = 0; i < nonDeletedCount; ++i) {
+        h_nonDeletedKeys[i] = h_input[deleteCount + i];
+    }
+
+    filter.containsMany(h_nonDeletedKeys, h_nonDeletedOutput);
+    size_t nonDeletedFound = countOnes(h_nonDeletedOutput.data(), nonDeletedCount);
+    std::cout << std::format(
+        "Non-deleted keys still found: {} / {}\n\n", nonDeletedFound, nonDeletedCount
     );
 
     std::cout << "Statistics:\n";
