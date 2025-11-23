@@ -4,7 +4,7 @@
   };
 
   outputs =
-    { nixpkgs, self }:
+    { nixpkgs, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -25,36 +25,39 @@
         };
 
       };
+      buildInputs = with cudaPkgs; [
+        cudatoolkit
+        cuda_cudart
+        cuda_cccl
+        pkgs.stdenv.cc.cc.lib
+        pkgs.openssl.dev
+        pkgs.openssl.out
+        nccl.dev
+        nccl.out
+      ];
+
+      nativeBuildInputs = with pkgs; [
+        llvm.clang-tools
+        llvm.lldb
+        meson
+        uv
+        pkg-config
+        doxygen
+        graphviz
+      ];
     in
     {
       devShells.${system}.default = pkgs.mkShell {
-        buildInputs = with cudaPkgs; [
-          cudatoolkit
-          cuda_cudart
-          cuda_cccl
-          pkgs.stdenv.cc.cc.lib
-          pkgs.openssl.dev
-          pkgs.openssl.out
-          nccl.dev
-          nccl.out
-        ];
 
-        nativeBuildInputs = with pkgs; [
-          llvm.clang-tools
-          llvm.lldb
-          meson
-          uv
-          pkg-config
-          doxygen
-          graphviz
-        ];
+        inherit buildInputs nativeBuildInputs;
 
         CPATH = pkgs.lib.makeIncludePath [
           cudaPkgs.cudatoolkit
         ];
 
-        LD_LIBRARY_PATH =
-          pkgs.lib.makeLibraryPath self.devShells.${system}.default.buildInputs + ":/run/opengl-driver/lib";
+        LD_LIBRARY_PATH = "${
+          pkgs.lib.makeLibraryPath (buildInputs ++ nativeBuildInputs)
+        }:/run/opengl-driver/lib";
 
         shellHook = ''
               if [ ! -e .clangd ]; then
@@ -67,9 +70,9 @@
               - -D__INTELLISENSE__
               - -D__CLANGD__
               - -I${cudaPkgs.cudatoolkit}/include
-              - -I${toString ./.}/include
-              - -I${toString ./.}/subprojects/cuco/include
-              - -I${toString ./.}/subprojects/googletest-1.17.0/googletest/include
+              - -I$(pwd)/include
+              - -I$(pwd)/subprojects/cuco/include
+              - -I$(pwd)/subprojects/googletest-1.17.0/googletest/include
               - -I${cudaPkgs.nccl.dev}/include
               - -I${pkgs.openssl.dev}/include
               - -D__LIBCUDAXX__STD_VER=${cuda.version.major}
