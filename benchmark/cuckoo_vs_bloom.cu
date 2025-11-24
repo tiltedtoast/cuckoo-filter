@@ -21,7 +21,7 @@ using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
 template <typename Filter>
 size_t cucoNumBlocks(size_t n) {
     constexpr auto bitsPerWord = sizeof(typename Filter::word_type) * 8;
-    return (n * Config::bitsPerTag) / (Filter::words_per_block * bitsPerWord);
+    return SDIV(n * Config::bitsPerTag, Filter::words_per_block * bitsPerWord);
 }
 
 template <double loadFactor = 0.95>

@@ -55,7 +55,8 @@ inline size_t adaptiveInsert(
     CuckooFilter<FilterConfig>& filter,
     thrust::device_vector<typename FilterConfig::KeyType>& d_keys
 ) {
-    static size_t threshold = getGPUL2CacheSize() / sizeof(typename FilterConfig::KeyType);
+    // static size_t threshold = getGPUL2CacheSize() / (FilterConfig::bitsPerTag / CHAR_BIT);
+    static constexpr size_t threshold = 1 << 25;
 
     if (d_keys.size() < threshold) {
         return filter.insertMany(d_keys);
