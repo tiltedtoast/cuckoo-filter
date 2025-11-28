@@ -151,11 +151,10 @@ def run_ncu_profile(
 
             if target_df.empty:
                 typer.secho(
-                    f"ERROR: No kernels matched patterns {patterns}. Using heuristics.",
+                    f"ERROR: No kernels matched patterns {patterns}",
                     fg=typer.colors.RED,
                     err=True,
                 )
-                # We raise here because if we can't find the kernel, the data is invalid
                 return None
 
         else:

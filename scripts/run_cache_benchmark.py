@@ -144,7 +144,7 @@ def main(
 
                 if metrics:
                     l1_hit_rate, l2_hit_rate = get_hit_rates(metrics)
-                    capacity = 2**exponent  # Compute capacity for storage
+                    capacity = 2**exponent
 
                     results.append(
                         {
