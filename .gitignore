@@ -21,3 +21,4 @@ benchmark*.json
 benchmark*.csv
 .venv
 docs
+__pycache__
