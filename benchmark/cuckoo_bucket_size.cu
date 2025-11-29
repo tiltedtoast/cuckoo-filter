@@ -35,7 +35,9 @@ class BucketSizeFixture : public benchmark::Fixture {
     void TearDown(const benchmark::State&) override {
         filter.reset();
         d_keys.clear();
+        d_keys.shrink_to_fit();
         d_output.clear();
+        d_output.shrink_to_fit();
     }
 
     void setCounters(benchmark::State& state) {
