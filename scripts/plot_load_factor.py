@@ -33,7 +33,9 @@ def extract_load_factor(name: str) -> Optional[float]:
 def extract_filter_type(name: str) -> Optional[str]:
     """Extract filter type from benchmark name"""
     # Format: CF_5/Insert or BBF_95/Query
-    if name.startswith("CF_"):
+    if name.startswith("CPUCF_"):
+        return "CPU Cuckoo"
+    elif name.startswith("CF_"):
         return "Cuckoo Filter"
     elif name.startswith("BBF_"):
         return "Bloom Filter"
@@ -146,6 +148,7 @@ def main(
     # Define colors and markers for each filter type (base colors)
     base_styles = {
         "Cuckoo Filter": {"color": "#2E86AB", "marker": "o"},
+        "CPU Cuckoo": {"color": "#00B4D8", "marker": "o"},
         "Bloom Filter": {"color": "#A23B72", "marker": "s"},
         "Quotient Filter": {"color": "#F18F01", "marker": "^"},
         "TCF": {"color": "#C73E1D", "marker": "v"},
@@ -207,21 +210,21 @@ def main(
         ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, which="both", ls="--", alpha=0.3)
-        ax.legend(fontsize=12, loc="best", framealpha=0.9)
+        ax.legend(fontsize=10, loc="center left", bbox_to_anchor=(1, 0.5), framealpha=1)
         ax.set_title(
             f"{operation} Performance",
             fontsize=16,
             fontweight="bold",
         )
 
-        # ax.set_yscale("log")
+        ax.set_yscale("log")
 
         plt.tight_layout()
 
         output_file = (
             output_dir / f"load_factor_{operation.lower().replace(' ', '_')}.png"
         )
-        plt.savefig(output_file, dpi=150, bbox_inches="tight")
+        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=False)
         typer.secho(
             f"{operation} throughput plot saved to {output_file}",
             fg=typer.colors.GREEN,

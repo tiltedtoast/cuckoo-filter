@@ -1,4 +1,5 @@
 #include <benchmark/benchmark.h>
+#include <cuckoofilter.h>
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -6,19 +7,27 @@
 #include <bulk_tcf_host.cuh>
 #include <cstddef>
 #include <cstdint>
+#include <cuckoo/cuckoo_parameter.hpp>
 #include <CuckooFilter.cuh>
 #include <cuco/bloom_filter.cuh>
 #include <cuda/std/cstdint>
+#include <filter.hpp>
 #include <hash_strategies.cuh>
 #include <helpers.cuh>
 #include <random>
 #include <thread>
 #include "benchmark_common.cuh"
+#include "parameter/parameter.hpp"
 
 namespace bm = benchmark;
 
 using Config = CuckooConfig<uint64_t, 16, 500, 128, 16, XorAltBucketPolicy>;
 using TCFType = host_bulk_tcf<uint64_t, uint16_t>;
+
+using CPUFilterParam = filters::cuckoo::Standard4<Config::bitsPerTag>;
+using CPUOptimParam = filters::parameter::PowerOfTwoMurmurScalar64PartitionedMT;
+using PartitionedCuckooFilter =
+    filters::Filter<filters::FilterType::Cuckoo, CPUFilterParam, Config::bitsPerTag, CPUOptimParam>;
 
 constexpr size_t FIXED_CAPACITY = 1ULL << 24;
 const size_t L2_CACHE_SIZE = getL2CacheSize();
@@ -154,6 +163,8 @@ class TCFFixture : public benchmark::Fixture {
         }
         d_keys.clear();
         d_keys.shrink_to_fit();
+        d_keysNegative.clear();
+        d_keysNegative.shrink_to_fit();
     }
 
     void setCounters(benchmark::State& state) const {
@@ -169,6 +180,88 @@ class TCFFixture : public benchmark::Fixture {
     Timer timer;
 };
 
+template <double loadFactor>
+class PartitionedCFFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
+
+   public:
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), loadFactor);
+        capacity = cap;
+        n = num;
+
+        keys = generateKeysCPU<uint64_t>(n, 42, 0, UINT32_MAX);
+        keysNegative = generateKeysCPU<uint64_t>(n, 99999, uint64_t(UINT32_MAX) + 1, UINT64_MAX);
+
+        s = static_cast<size_t>(100.0 / loadFactor);
+
+        size_t expectedSize =
+            (capacity * Config::bitsPerTag * (static_cast<double>(s) / 100)) / 8.0;
+        n_partitions = 1;
+
+        if (expectedSize > L2_CACHE_SIZE) {
+            size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
+            while (n_partitions < partitionsNeeded) {
+                n_partitions *= 2;
+            }
+        }
+
+        n_threads = std::min(n_partitions, size_t(std::thread::hardware_concurrency() / 2));
+        n_tasks = 1;
+    }
+
+    void TearDown(const benchmark::State&) override {
+        keys.clear();
+        keysNegative.clear();
+    }
+
+    void setCounters(benchmark::State& state, size_t filterMemory) const {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    size_t capacity;
+    size_t n;
+    size_t s;
+    size_t n_partitions;
+    size_t n_threads;
+    size_t n_tasks;
+    std::vector<uint64_t> keys;
+    std::vector<uint64_t> keysNegative;
+    Timer timer;
+};
+
+template <double loadFactor>
+class CPUCuckooFilterFixture : public benchmark::Fixture {
+    using benchmark::Fixture::SetUp;
+    using benchmark::Fixture::TearDown;
+
+   public:
+    void SetUp(const benchmark::State& state) override {
+        auto [cap, num] = calculateCapacityAndSize(state.range(0), loadFactor);
+        capacity = cap;
+        n = num;
+
+        keys = generateKeysCPU<uint64_t>(n, 42, 0, UINT32_MAX);
+        keysNegative = generateKeysCPU<uint64_t>(n, 99999, uint64_t(UINT32_MAX) + 1, UINT64_MAX);
+    }
+
+    void TearDown(const benchmark::State&) override {
+        keys.clear();
+        keysNegative.clear();
+    }
+
+    void setCounters(benchmark::State& state, size_t filterMemory) const {
+        setCommonCounters(state, filterMemory, n);
+    }
+
+    size_t capacity;
+    size_t n;
+    std::vector<uint64_t> keys;
+    std::vector<uint64_t> keysNegative;
+    Timer timer;
+};
+
 #define BENCHMARK_CONFIG_LF             \
     ->Arg(FIXED_CAPACITY)               \
         ->Unit(benchmark::kMillisecond) \
@@ -178,7 +271,7 @@ class TCFFixture : public benchmark::Fixture {
         ->ReportAggregatesOnly(true)
 
 #define DEFINE_AND_REGISTER_ALL_FOR_LOAD_FACTOR(ID, LF)                                       \
-    /* Cuckoo Filter */                                                                       \
+    /* GPU Cuckoo Filter */                                                                   \
     using CF_##ID = CFFixtureLF<(LF) * 0.01>;                                                 \
     BENCHMARK_DEFINE_F(CF_##ID, Insert)(bm::State & state) {                                  \
         for (auto _ : state) {                                                                \
@@ -232,6 +325,70 @@ class TCFFixture : public benchmark::Fixture {
     BENCHMARK_REGISTER_F(CF_##ID, Query) BENCHMARK_CONFIG_LF;                                 \
     BENCHMARK_REGISTER_F(CF_##ID, QueryNegative) BENCHMARK_CONFIG_LF;                         \
     BENCHMARK_REGISTER_F(CF_##ID, Delete) BENCHMARK_CONFIG_LF;                                \
+                                                                                              \
+    /* CPU Cuckoo Filter (2014) */                                                            \
+    using CPUCF_##ID = CPUCuckooFilterFixture<(LF) * 0.01>;                                   \
+    BENCHMARK_DEFINE_F(CPUCF_##ID, Insert)(bm::State & state) {                               \
+        for (auto _ : state) {                                                                \
+            cuckoofilter::CuckooFilter<uint64_t, Config::bitsPerTag> tempFilter(capacity);    \
+            timer.start();                                                                    \
+            size_t inserted = 0;                                                              \
+            for (const auto& key : keys) {                                                    \
+                if (tempFilter.Add(key) == cuckoofilter::Ok) {                                \
+                    inserted++;                                                               \
+                }                                                                             \
+            }                                                                                 \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(inserted);                                                      \
+        }                                                                                     \
+        size_t filterMemory =                                                                 \
+            cuckoofilter::CuckooFilter<uint64_t, Config::bitsPerTag>(capacity).SizeInBytes(); \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_DEFINE_F(CPUCF_##ID, Query)(bm::State & state) {                                \
+        cuckoofilter::CuckooFilter<uint64_t, Config::bitsPerTag> filter(capacity);            \
+        for (const auto& key : keys) {                                                        \
+            filter.Add(key);                                                                  \
+        }                                                                                     \
+        size_t filterMemory = filter.SizeInBytes();                                           \
+        for (auto _ : state) {                                                                \
+            timer.start();                                                                    \
+            size_t found = 0;                                                                 \
+            for (const auto& key : keys) {                                                    \
+                if (filter.Contain(key) == cuckoofilter::Ok) {                                \
+                    found++;                                                                  \
+                }                                                                             \
+            }                                                                                 \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(found);                                                         \
+        }                                                                                     \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_DEFINE_F(CPUCF_##ID, QueryNegative)(bm::State & state) {                        \
+        cuckoofilter::CuckooFilter<uint64_t, Config::bitsPerTag> filter(capacity);            \
+        for (const auto& key : keys) {                                                        \
+            filter.Add(key);                                                                  \
+        }                                                                                     \
+        size_t filterMemory = filter.SizeInBytes();                                           \
+        for (auto _ : state) {                                                                \
+            timer.start();                                                                    \
+            size_t found = 0;                                                                 \
+            for (const auto& key : keysNegative) {                                            \
+                if (filter.Contain(key) == cuckoofilter::Ok) {                                \
+                    found++;                                                                  \
+                }                                                                             \
+            }                                                                                 \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(found);                                                         \
+        }                                                                                     \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_REGISTER_F(CPUCF_##ID, Insert) BENCHMARK_CONFIG_LF;                             \
+    BENCHMARK_REGISTER_F(CPUCF_##ID, Query) BENCHMARK_CONFIG_LF;                              \
+    BENCHMARK_REGISTER_F(CPUCF_##ID, QueryNegative) BENCHMARK_CONFIG_LF;                      \
                                                                                               \
     /* Bloom Filter */                                                                        \
     using BBF_##ID = BloomFilterFixture<(LF) * 0.01>;                                         \
@@ -345,7 +502,54 @@ class TCFFixture : public benchmark::Fixture {
     BENCHMARK_REGISTER_F(TCF_##ID, Insert) BENCHMARK_CONFIG_LF;                               \
     BENCHMARK_REGISTER_F(TCF_##ID, Query) BENCHMARK_CONFIG_LF;                                \
     BENCHMARK_REGISTER_F(TCF_##ID, QueryNegative) BENCHMARK_CONFIG_LF;                        \
-    BENCHMARK_REGISTER_F(TCF_##ID, Delete) BENCHMARK_CONFIG_LF;
+    BENCHMARK_REGISTER_F(TCF_##ID, Delete) BENCHMARK_CONFIG_LF;                               \
+                                                                                              \
+    /* Partitioned Cuckoo Filter */                                                           \
+    using PCF_##ID = PartitionedCFFixture<(LF) * 0.01>;                                       \
+    BENCHMARK_DEFINE_F(PCF_##ID, Insert)(bm::State & state) {                                 \
+        for (auto _ : state) {                                                                \
+            PartitionedCuckooFilter tempFilter(s, n_partitions, n_threads, n_tasks);          \
+            auto constructKeys = keys;                                                        \
+            timer.start();                                                                    \
+            bool success = tempFilter.construct(constructKeys.data(), constructKeys.size());  \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(success);                                                       \
+        }                                                                                     \
+        PartitionedCuckooFilter finalFilter(s, n_partitions, n_threads, n_tasks);             \
+        finalFilter.construct(keys.data(), keys.size());                                      \
+        size_t filterMemory = finalFilter.size();                                             \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_DEFINE_F(PCF_##ID, Query)(bm::State & state) {                                  \
+        PartitionedCuckooFilter filter(s, n_partitions, n_threads, n_tasks);                  \
+        filter.construct(keys.data(), keys.size());                                           \
+        size_t filterMemory = filter.size();                                                  \
+        for (auto _ : state) {                                                                \
+            timer.start();                                                                    \
+            size_t found = filter.count(keys.data(), keys.size());                            \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(found);                                                         \
+        }                                                                                     \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_DEFINE_F(PCF_##ID, QueryNegative)(bm::State & state) {                          \
+        PartitionedCuckooFilter filter(s, n_partitions, n_threads, n_tasks);                  \
+        filter.construct(keys.data(), keys.size());                                           \
+        size_t filterMemory = filter.size();                                                  \
+        for (auto _ : state) {                                                                \
+            timer.start();                                                                    \
+            size_t found = filter.count(keysNegative.data(), keysNegative.size());            \
+            double elapsed = timer.stop();                                                    \
+            state.SetIterationTime(elapsed);                                                  \
+            bm::DoNotOptimize(found);                                                         \
+        }                                                                                     \
+        setCounters(state, filterMemory);                                                     \
+    }                                                                                         \
+    BENCHMARK_REGISTER_F(PCF_##ID, Insert) BENCHMARK_CONFIG_LF;                               \
+    BENCHMARK_REGISTER_F(PCF_##ID, Query) BENCHMARK_CONFIG_LF;                                \
+    BENCHMARK_REGISTER_F(PCF_##ID, QueryNegative) BENCHMARK_CONFIG_LF;
 
 DEFINE_AND_REGISTER_ALL_FOR_LOAD_FACTOR(5, 5)
 DEFINE_AND_REGISTER_ALL_FOR_LOAD_FACTOR(10, 10)
