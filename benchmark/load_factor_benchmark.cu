@@ -29,7 +29,7 @@ using CPUOptimParam = filters::parameter::PowerOfTwoMurmurScalar64PartitionedMT;
 using PartitionedCuckooFilter =
     filters::Filter<filters::FilterType::Cuckoo, CPUFilterParam, Config::bitsPerTag, CPUOptimParam>;
 
-constexpr size_t FIXED_CAPACITY = 1ULL << 24;
+constexpr size_t FIXED_CAPACITY = 1ULL << 28;
 const size_t L2_CACHE_SIZE = getL2CacheSize();
 
 template <double loadFactor>
@@ -145,8 +145,12 @@ class TCFFixture : public benchmark::Fixture {
    public:
     void SetUp(const benchmark::State& state) override {
         auto [cap, num] = calculateCapacityAndSize(state.range(0), loadFactor);
-        capacity = cap;
         n = num;
+
+        // TCF can only hold 0.85 * capacity items
+        constexpr double TCF_CAPACITY_FACTOR = 0.85;
+        auto requiredUsableCapacity = static_cast<size_t>(n / loadFactor);
+        capacity = static_cast<size_t>(requiredUsableCapacity / TCF_CAPACITY_FACTOR);
 
         d_keys.resize(n);
         d_keysNegative.resize(n);

@@ -162,6 +162,11 @@ static void TCF_FPR(bm::State& state) {
     size_t capacity = targetMemory / sizeof(uint16_t);
     auto n = static_cast<size_t>(capacity * LOAD_FACTOR);
 
+    // TCF can only hold 0.85 * capacity items
+    constexpr double TCF_CAPACITY_FACTOR = 0.85;
+    auto requiredUsableCapacity = static_cast<size_t>(n / LOAD_FACTOR);
+    capacity = static_cast<size_t>(requiredUsableCapacity / TCF_CAPACITY_FACTOR);
+
     thrust::device_vector<uint64_t> d_keys(n);
     generateKeysGPURange(d_keys, n, uint64_t(0), uint64_t(UINT32_MAX));
 
