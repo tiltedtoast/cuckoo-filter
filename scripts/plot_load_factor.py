@@ -169,7 +169,6 @@ def main(
         "Cuckoo Filter": {"color": "#2E86AB", "marker": "o"},
         "CPU Cuckoo": {"color": "#00B4D8", "marker": "o"},
         "Bloom Filter": {"color": "#A23B72", "marker": "s"},
-        "Quotient Filter": {"color": "#F18F01", "marker": "^"},
         "TCF": {"color": "#C73E1D", "marker": "v"},
         "GQF": {"color": "#F18F01", "marker": "^"},
         "Partitioned Cuckoo": {"color": "#6A994E", "marker": "D"},

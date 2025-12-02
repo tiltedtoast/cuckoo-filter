@@ -70,6 +70,7 @@ def main(
         "cuckoo": {"color": "#2E86AB", "marker": "o"},
         "bloom": {"color": "#A23B72", "marker": "s"},
         "tcf": {"color": "#C73E1D", "marker": "^"},
+        "gqf": {"color": "#F18F01", "marker": "D"},
     }
 
     operation_linestyles = {
