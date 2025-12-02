@@ -3,11 +3,11 @@ index aac0c37..dd02f16 100644
 --- a/include/gqf_int.cuh
 +++ b/include/gqf_int.cuh
 @@ -22,12 +22,18 @@ extern "C" {
- 
+
  #define MAGIC_NUMBER 1018874902021329732
- 
--/* Can be 
--   0 (choose size at run-time), 
+
+-/* Can be
+-   0 (choose size at run-time),
 +/* Can be
 +   0 (choose size at run-time),
     8, 16, 32, or 64 (for optimized versions),
@@ -21,6 +21,6 @@ index aac0c37..dd02f16 100644
 +#ifndef R_BITS
 +#   define R_BITS 16
 +#endif
- 
+
  /* Must be >= 6.  6 seems fastest. */
  #define QF_BLOCK_OFFSET_BITS (6)

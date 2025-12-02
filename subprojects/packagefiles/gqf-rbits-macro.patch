@@ -3,8 +3,8 @@ index 36c9098..22f57bb 100644
 --- a/src/gqf.cu
 +++ b/src/gqf.cu
 @@ -2125,8 +2125,12 @@ __host__ void qf_malloc_device(QF** qf, int nbits, bool bulk_config){
- 
- 
+
+
  	//bring in compile #define
 -	int rbits = 8;
 -	int vbits = 0;
@@ -14,6 +14,6 @@ index 36c9098..22f57bb 100644
 +        int rbits = 8;
 +#endif
 +        int vbits = 0;
- 
+
  	QF host_qf;
  	QF temp_device_qf;

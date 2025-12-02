@@ -5,34 +5,34 @@ index 36c9098..1cc4fb0 100644
 @@ -2140,6 +2140,10 @@ __host__ void qf_malloc_device(QF** qf, int nbits, bool bulk_config){
  	qf_malloc(&host_qf, nslots, num_hash_bits, vbits, QF_HASH_INVERTIBLE, false, 0);
  	qf_set_auto_resize(&host_qf, false);
- 
+
 +    // Save host pointers for cleanup after copying to device
 +    void* host_metadata_buffer = (void*)host_qf.metadata;
 +    qfruntime* host_runtimedata = host_qf.runtimedata;
 +    uint16_t* host_locks = host_qf.runtimedata->locks;
- 
- 
+
+
  	qfruntime* _runtime;
 @@ -2181,8 +2185,8 @@ __host__ void qf_malloc_device(QF** qf, int nbits, bool bulk_config){
- 	
- 
+
+
  	//wipe and replace
 -	free(host_qf.runtimedata->locks);
 -	host_qf.runtimedata->locks = dev_locks;
 +    free(host_locks);
 +    host_qf.runtimedata->locks = dev_locks;
- 
+
  	cudaMalloc((void**)&_runtime, sizeof(qfruntime));
  	cudaMalloc((void**)&_metadata, sizeof(qfmetadata));
 @@ -2216,8 +2220,9 @@ __host__ void qf_malloc_device(QF** qf, int nbits, bool bulk_config){
- 
+
  	*qf = temp_dev_ptr;
- 
+
 -
 -
 +    // Free host memory that was allocated in qf_malloc and is no longer needed
 +    free(host_runtimedata);
 +    free(host_metadata_buffer);
  }
- 
- 
+
+

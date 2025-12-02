@@ -5,57 +5,57 @@ index 36c9098..72b2b46 100644
 @@ -2527,29 +2527,29 @@ __host__ __device__ int qf_insert(QF *qf, uint64_t key, uint64_t value, uint64_t
  GPU Modifications
  --------------------------*/
- 
-- 
+
+-
 +
  //approx filter locking code
  //locking implementation for the 16 bit locks
  //undefined behavior if you try to unlock a not locked lock
 -__device__ void lock_16(uint16_t * lock, uint64_t index){
 +__device__ void lock_16(unsigned short * lock, uint64_t index){
- 
- 
+
+
 -	uint16_t zero = 0;
 -	uint16_t one = 1;
 +	unsigned short zero = 0;
 +	unsigned short one = 1;
- 
+
 -	while (atomicCAS((uint16_t *) &lock[index*LOCK_DIST], zero, one) != zero)
 +	while (atomicCAS((unsigned short *) &lock[index*LOCK_DIST], zero, one) != zero)
  		;
- 
+
  }
- 
+
 -__device__ void unlock_16(uint16_t * lock, uint64_t index){
 +__device__ void unlock_16(unsigned short * lock, uint64_t index){
- 
- 
+
+
 -	uint16_t zero = 0;
 -	uint16_t one = 1;
 +	unsigned short zero = 0;
 +	unsigned short one = 1;
 +
 +	atomicCAS((unsigned short *) &lock[index*LOCK_DIST], one, zero);
- 
+
 -	atomicCAS((uint16_t *) &lock[index*LOCK_DIST], one, zero);
--		
- 
+-
+
  }
- 
+
 @@ -2557,12 +2557,12 @@ __device__ void unlock_16(uint16_t * lock, uint64_t index){
  //lock_16 but built to be included as a piece of a while loop
  // this is more in line with traditional cuda processing, may increase throughput
- 
+
 -__device__ bool try_lock_16(uint16_t * lock, uint64_t index){
 +__device__ bool try_lock_16(unsigned short * lock, uint64_t index){
- 
+
 -	uint16_t zero = 0;
 -	uint16_t one = 1;
 +	unsigned short zero = 0;
 +	unsigned short one = 1;
- 
+
 -	if (atomicCAS((uint16_t *) &lock[index*LOCK_DIST], zero, one) == zero){
 +	if (atomicCAS((unsigned short *) &lock[index*LOCK_DIST], zero, one) == zero){
- 
+
  		return true;
  	}

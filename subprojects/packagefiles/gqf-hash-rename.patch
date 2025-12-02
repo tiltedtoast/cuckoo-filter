@@ -5,25 +5,25 @@ index 4606369..c16954d 100644
 @@ -14,11 +14,11 @@
  #include <stdlib.h>
  #include <stdint.h>
- 
+
 -__host__ __device__ uint64_t MurmurHash64B ( const void * key, int len, unsigned int seed );
 -__host__ __device__ uint64_t MurmurHash64A ( const void * key, int len, unsigned int seed );
 +__host__ __device__ uint64_t aMurmurHash64B ( const void * key, int len, unsigned int seed );
 +__host__ __device__ uint64_t aMurmurHash64A ( const void * key, int len, unsigned int seed );
- 
+
 -__host__ __device__ uint64_t hash_64(uint64_t key, uint64_t mask);
 -__host__ __device__ uint64_t hash_64i(uint64_t key, uint64_t mask);
 +__host__ __device__ uint64_t ahash_64(uint64_t key, uint64_t mask);
 +__host__ __device__ uint64_t ahash_64i(uint64_t key, uint64_t mask);
- 
+
  #endif  // #ifndef _HASHUTIL_H_
- 
+
 diff --git a/src/gqf.cu b/src/gqf.cu
 index 36c9098..a36bf06 100644
 --- a/src/gqf.cu
 +++ b/src/gqf.cu
 @@ -2405,9 +2405,9 @@ __host__ __device__ qf_returns qf_insert_not_exists(QF *qf, uint64_t key, uint64
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -32,10 +32,10 @@ index 36c9098..a36bf06 100644
 -			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
  	}
- 
+
  	uint64_t hash = (key << qf->metadata->value_bits) | (value & BITMASK(qf->metadata->value_bits));
 @@ -2478,9 +2478,9 @@ __host__ __device__ int qf_insert(QF *qf, uint64_t key, uint64_t value, uint64_t
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -44,10 +44,10 @@ index 36c9098..a36bf06 100644
 -			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
  	}
- 
+
  	uint64_t hash = (key << qf->metadata->value_bits) | (value & BITMASK(qf->metadata->value_bits));
 @@ -2623,10 +2623,10 @@ __global__ void hash_all(QF* qf, uint64_t* vals, uint64_t* hashes, uint64_t nval
- 
+
    if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key),
@@ -57,10 +57,10 @@ index 36c9098..a36bf06 100644
 -			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
  	}
- 
+
  	//uint64_t hash = (key << qf->metadata->value_bits) | (value & BITMASK(qf->metadata->value_bits));
 @@ -2916,9 +2916,9 @@ __device__ qf_returns point_insert_not_exists(QF* qf, uint64_t key, uint8_t valu
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
    		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -  			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -69,10 +69,10 @@ index 36c9098..a36bf06 100644
 -  			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +  			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
    	}
- 
+
  	uint64_t hash = key % qf->metadata->range;
 @@ -2972,9 +2972,9 @@ __device__ qf_returns point_insert(QF* qf, uint64_t key, uint8_t value, uint8_t
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
    		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -  			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -81,10 +81,10 @@ index 36c9098..a36bf06 100644
 -  			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +  			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
    	}
- 
+
  	uint64_t hash = key % qf->metadata->range;
 @@ -3028,9 +3028,9 @@ __device__ uint64_t point_query(QF* qf, uint64_t key, uint8_t value, uint8_t& re
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
    		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -  			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -93,10 +93,10 @@ index 36c9098..a36bf06 100644
 -  			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +  			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
    	}
- 
+
  	uint64_t hash = key % qf->metadata->range;
 @@ -3058,9 +3058,9 @@ __device__ uint64_t point_query_concurrent(QF* qf, uint64_t key, uint8_t value,
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
    		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -  			key = MurmurHash64A(((void *)&key), sizeof(key), qf->metadata->seed) % qf->metadata->range;
@@ -105,10 +105,10 @@ index 36c9098..a36bf06 100644
 -  			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +  			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
    	}
- 
+
  	uint64_t hash = key % qf->metadata->range;
 @@ -3448,10 +3448,10 @@ __host__ __device__ int qf_remove(QF *qf, uint64_t key, uint64_t value, uint64_t
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key),
@@ -121,7 +121,7 @@ index 36c9098..a36bf06 100644
  	uint64_t hash = (key << qf->metadata->value_bits) | (value &
  																											 BITMASK(qf->metadata->value_bits));
 @@ -3466,10 +3466,10 @@ __host__ __device__ int qf_delete_key_value(QF *qf, uint64_t key, uint64_t value
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key),
@@ -134,7 +134,7 @@ index 36c9098..a36bf06 100644
  	uint64_t hash = (key << qf->metadata->value_bits) | (value &
  																											 BITMASK(qf->metadata->value_bits));
 @@ -3483,10 +3483,10 @@ __host__ __device__ uint64_t qf_count_key_value(const QF *qf, uint64_t key, uint
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key),
@@ -144,7 +144,7 @@ index 36c9098..a36bf06 100644
 -			key = hash_64(key, BITMASK(qf->metadata->key_bits));
 +			key = ahash_64(key, BITMASK(qf->metadata->key_bits));
  	}
- 
+
  	uint64_t hash = (key << qf->metadata->value_bits) | (value &
 @@ -3521,10 +3521,10 @@ __host__ __device__ uint64_t qf_query(const QF *qf, uint64_t key, uint64_t *valu
  {
@@ -173,7 +173,7 @@ index 36c9098..a36bf06 100644
  	uint64_t hash = (key << qf->metadata->value_bits) | (value &
  																											 BITMASK(qf->metadata->value_bits));
 @@ -3709,10 +3709,10 @@ int64_t qf_iterator_from_key_value(const QF *qf, QFi *qfi, uint64_t key,
- 
+
  	if (GET_KEY_HASH(flags) != QF_KEY_IS_HASH) {
  		if (qf->metadata->hash_mode == QF_HASH_DEFAULT)
 -			key = MurmurHash64A(((void *)&key), sizeof(key),
@@ -192,22 +192,22 @@ index 36c9098..a36bf06 100644
 -			*key = hash_64i(*key, BITMASK(qfi->qf->metadata->key_bits));
 +			*key = ahash_64i(*key, BITMASK(qfi->qf->metadata->key_bits));
  	}
- 
+
  	return ret;
 diff --git a/src/gqf_verify.cu b/src/gqf_verify.cu
 index 85da5be..e2f8729 100644
 --- a/src/gqf_verify.cu
 +++ b/src/gqf_verify.cu
 @@ -217,9 +217,9 @@ int main(int argc, char** argv) {
- 
- 
+
+
  		for (int i = 0; i < kmers.size(); i++){
 -			hashes.push_back(MurmurHash64A(kmers[i].c_str(), KMER_SIZE, 1));
 +			hashes.push_back(aMurmurHash64A(kmers[i].c_str(), KMER_SIZE, 1));
  		}
 -		//uint64_t MurmurHash64A ( const void * key, int len, unsigned int seed )
 +		//uint64_t aMurmurHash64A ( const void * key, int len, unsigned int seed )
- 
+
  		for (int i=0; i < 10; i++){
  			printf("%d: %llu\n", i, hashes[i]);
 diff --git a/src/hashutil.cu b/src/hashutil.cu
@@ -215,18 +215,18 @@ index fef0def..88cea3d 100644
 --- a/src/hashutil.cu
 +++ b/src/hashutil.cu
 @@ -20,7 +20,7 @@
- 
+
  // 64-bit hash for 64-bit platforms
- 
+
 -__host__ __device__ uint64_t MurmurHash64A ( const void * key, int len, unsigned int seed )
 +__host__ __device__ uint64_t aMurmurHash64A ( const void * key, int len, unsigned int seed )
  {
  	const uint64_t m = 0xc6a4a7935bd1e995;
  	const int r = 47;
 @@ -66,7 +66,7 @@ __host__ __device__ uint64_t MurmurHash64A ( const void * key, int len, unsigned
- 
+
  // 64-bit hash for 32-bit platforms
- 
+
 -__host__ __device__ uint64_t MurmurHash64B ( const void * key, int len, unsigned int seed )
 +__host__ __device__ uint64_t aMurmurHash64B ( const void * key, int len, unsigned int seed )
  {
@@ -235,18 +235,18 @@ index fef0def..88cea3d 100644
 @@ -129,7 +129,7 @@ __host__ __device__ uint64_t MurmurHash64B ( const void * key, int len, unsigned
  // Thomas Wang's integer hash functions. See
  // <https://gist.github.com/lh3/59882d6b96166dfc3d8d> for a snapshot.
- 
+
 -__host__ __device__ uint64_t hash_64(uint64_t key, uint64_t mask)
 +__host__ __device__ uint64_t ahash_64(uint64_t key, uint64_t mask)
  {
  	key = (~key + (key << 21)) & mask; // key = (key << 21) - key - 1;
  	key = key ^ key >> 24;
 @@ -143,7 +143,7 @@ __host__ __device__ uint64_t hash_64(uint64_t key, uint64_t mask)
- 
+
  // The inversion of hash_64(). Modified from
  // <https://naml.us/blog/tag/invertible>
 -__host__ __device__ uint64_t hash_64i(uint64_t key, uint64_t mask)
 +__host__ __device__ uint64_t ahash_64i(uint64_t key, uint64_t mask)
  {
  	uint64_t tmp;
- 
+

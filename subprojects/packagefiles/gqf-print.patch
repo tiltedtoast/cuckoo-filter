@@ -5,8 +5,8 @@ index 36c9098..8f10a8b 100644
 @@ -2080,7 +2080,6 @@ __host__ bool qf_malloc(QF *qf, uint64_t nslots, uint64_t key_bits, uint64_t
  	void* buffer = malloc(total_num_bytes);
    memset(buffer, 0, total_num_bytes);
- 
+
 -  printf("QF bytes: %llu\n", total_num_bytes);
- 
+
  	if (buffer == NULL) {
  		perror("Couldn't allocate memory for the CQF.");
