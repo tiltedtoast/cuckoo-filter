@@ -7,18 +7,25 @@ spack:
   specs:
   - meson
   - nvhpc
-  - hyperfine
   view: true
   concretizer:
-    unify: when_possible
-    reuse: true
+    unify: true
   packages:
     gcc:
       externals:
-      - spec: gcc@14.2.1 languages:='c,c++,fortran'
+      - spec: gcc@14.3.1 languages:='c,c++,fortran'
         prefix: /usr
         extra_attributes:
           compilers:
             c: /usr/bin/gcc
             cxx: /usr/bin/g++
             fortran: /usr/bin/gfortran
+    llvm-amdgpu:
+      externals:
+      - spec: llvm-amdgpu@7.1.1
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/amdclang
+            cxx: /usr/bin/amdclang++
+            fortran: /usr/bin/amdflang
