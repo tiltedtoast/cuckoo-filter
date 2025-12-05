@@ -73,6 +73,17 @@ def main(
         "gqf": {"color": "#F18F01", "marker": "D"},
     }
 
+    # Display names for filters
+    filter_display_names = {
+        "cuckoo": "Cuckoo",
+        "bloom": "Blocked Bloom",
+        "tcf": "TCF",
+        "gqf": "GQF",
+    }
+
+    def get_filter_display_name(filter_type: str) -> str:
+        return filter_display_names.get(filter_type, filter_type.capitalize())
+
     operation_linestyles = {
         "insert": "-",
         "query": "--",
@@ -99,7 +110,7 @@ def main(
                 ax.plot(
                     capacities,
                     hit_rates,
-                    label=filter_type.capitalize(),
+                    label=get_filter_display_name(filter_type),
                     linewidth=2.5,
                     markersize=8,
                     color=style.get("color"),
@@ -162,7 +173,7 @@ def main(
             ax.set_xlabel("Capacity (elements)", fontsize=12, fontweight="bold")
             ax.set_ylabel(f"{cache_level} Hit Rate (%)", fontsize=12, fontweight="bold")
             ax.set_title(
-                f"{cache_level} Cache ({filter_type.capitalize()})",
+                f"{cache_level} Cache ({get_filter_display_name(filter_type)})",
                 fontsize=14,
                 fontweight="bold",
             )
@@ -172,7 +183,7 @@ def main(
             ax.set_ylim(0, 105)
 
         plt.suptitle(
-            f"Cache Hit Rate vs. Capacity - {filter_type.capitalize()} Filter",
+            f"Cache Hit Rate vs. Capacity - {get_filter_display_name(filter_type)} Filter",
             fontsize=16,
             fontweight="bold",
             y=1.00,
@@ -182,7 +193,7 @@ def main(
         output_file = output_dir / f"cache_{filter_type}_combined.png"
         plt.savefig(output_file, dpi=150, bbox_inches="tight")
         typer.secho(
-            f"{filter_type.capitalize()} combined plot saved to {output_file}",
+            f"{get_filter_display_name(filter_type)} combined plot saved to {output_file}",
             fg=typer.colors.GREEN,
         )
         plt.close()
@@ -209,7 +220,7 @@ def main(
                 ax.plot(
                     capacities,
                     hit_rates,
-                    label=filter_type.capitalize(),
+                    label=get_filter_display_name(filter_type),
                     linewidth=2.5,
                     markersize=8,
                     color=style.get("color"),
@@ -225,7 +236,7 @@ def main(
             )
             ax.set_xscale("log", base=2)
             ax.grid(True, which="both", ls="--", alpha=0.3)
-            ax.legend(fontsize=11, loc="best", framealpha=0.9)
+            ax.legend(fontsize=11, loc="best", framealpha=0)
             ax.set_ylim(0, 105)
 
         plt.suptitle(
@@ -237,7 +248,7 @@ def main(
         plt.tight_layout()
 
         output_file = output_dir / f"cache_overview_{operation}.png"
-        plt.savefig(output_file, dpi=150, bbox_inches="tight")
+        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=True)
         typer.secho(
             f"Overview {operation} plot saved to {output_file}",
             fg=typer.colors.GREEN,

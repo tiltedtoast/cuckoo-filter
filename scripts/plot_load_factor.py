@@ -48,7 +48,7 @@ def extract_filter_type(name: str) -> Optional[str]:
     elif name.startswith("CF_"):
         return "Cuckoo Filter"
     elif name.startswith("BBF_"):
-        return "Bloom Filter"
+        return "Blocked Bloom"
     elif name.startswith("QF_"):
         return "Quotient Filter"
     elif name.startswith("TCF_"):
@@ -168,7 +168,7 @@ def main(
     base_styles = {
         "Cuckoo Filter": {"color": "#2E86AB", "marker": "o"},
         "CPU Cuckoo": {"color": "#00B4D8", "marker": "o"},
-        "Bloom Filter": {"color": "#A23B72", "marker": "s"},
+        "Blocked Bloom": {"color": "#A23B72", "marker": "s"},
         "TCF": {"color": "#C73E1D", "marker": "v"},
         "GQF": {"color": "#F18F01", "marker": "^"},
         "Partitioned Cuckoo": {"color": "#6A994E", "marker": "D"},
@@ -229,7 +229,7 @@ def main(
         ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, which="both", ls="--", alpha=0.3)
-        ax.legend(fontsize=10, loc="center left", bbox_to_anchor=(1, 0.5), framealpha=1)
+        ax.legend(fontsize=10, loc="center left", bbox_to_anchor=(1, 0.5), framealpha=0)
 
         # Build title with element count if available
         title = f"{operation} Performance"
@@ -252,7 +252,7 @@ def main(
         output_file = (
             output_dir / f"load_factor_{operation.lower().replace(' ', '_')}.png"
         )
-        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=False)
+        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=True)
         typer.secho(
             f"{operation} throughput plot saved to {output_file}",
             fg=typer.colors.GREEN,

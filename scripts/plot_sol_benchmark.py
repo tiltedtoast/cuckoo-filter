@@ -62,6 +62,23 @@ def main(
         "cuckoo": {"color": "#2E86AB", "marker": "o"},
         "bloom": {"color": "#A23B72", "marker": "s"},
         "tcf": {"color": "#C73E1D", "marker": "^"},
+        "gqf": {"color": "#F18F01", "marker": "D"},
+    }
+
+    filter_display_names = {
+        "cuckoo": "Cuckoo",
+        "bloom": "Blocked Bloom",
+        "tcf": "TCF",
+        "gqf": "GQF",
+    }
+
+    def get_filter_display_name(filter_type: str) -> str:
+        return filter_display_names.get(filter_type, filter_type.capitalize())
+
+    operation_markers = {
+        "insert": "o",
+        "query": "s",
+        "delete": "^",
     }
 
     metric_styles = {
@@ -107,7 +124,7 @@ def main(
             ax.set_xlabel("Filter Capacity (elements)", fontsize=14, fontweight="bold")
             ax.set_ylabel("Throughput (% of Peak)", fontsize=14, fontweight="bold")
             ax.set_title(
-                f"SOL Throughput Analysis - {filter_type.capitalize()} / {operation.capitalize()}",
+                f"SOL Throughput Analysis - {get_filter_display_name(filter_type)} / {operation.capitalize()}",
                 fontsize=16,
                 fontweight="bold",
                 pad=20,
@@ -149,7 +166,7 @@ def main(
                 ax.plot(
                     filter_subset["capacity"].values,
                     filter_subset[metric_col].values,
-                    label=filter_type.capitalize(),
+                    label=get_filter_display_name(filter_type),
                     linewidth=2.5,
                     markersize=8,
                     **style,
@@ -176,6 +193,76 @@ def main(
             plt.savefig(output_file, dpi=150, bbox_inches="tight")
             typer.secho(f"Saved {output_file}", fg=typer.colors.GREEN)
             plt.close()
+
+    # 3. Small Multiples: 2x2 grid with one subplot per filter
+    # Each subplot shows all metrics, with operations as line styles
+    for metric_col, metric_name in METRICS:
+        if metric_col not in df.columns:
+            continue
+
+        filters = ["cuckoo", "bloom", "tcf", "gqf"]
+        available_filters = [f for f in filters if f in df["filter"].unique()]
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=False, sharey=False)
+        axes = axes.flatten()
+
+        for idx, filter_type in enumerate(available_filters):
+            ax = axes[idx]
+            filter_df = df[df["filter"] == filter_type]
+
+            for operation in sorted(filter_df["operation"].unique()):
+                subset = filter_df[filter_df["operation"] == operation].sort_values(
+                    "capacity"
+                )
+                if subset.empty:
+                    continue
+
+                marker = operation_markers.get(operation, "o")
+                style = filter_styles.get(filter_type, {})
+
+                ax.plot(
+                    subset["capacity"].values,
+                    subset[metric_col].values,
+                    label=operation.capitalize(),
+                    linewidth=2.5,
+                    markersize=8,
+                    color=style.get("color"),
+                    marker=marker,
+                    linestyle="-",
+                )
+
+            ax.set_title(
+                get_filter_display_name(filter_type),
+                fontsize=14,
+                fontweight="bold",
+            )
+            ax.set_xscale("log", base=2)
+            ax.set_ylim(0, 105)
+            ax.grid(True, which="both", ls="--", alpha=0.3)
+            ax.legend(fontsize=10, loc="best", framealpha=0)
+
+        # Hide unused subplots if fewer than 4 filters
+        for idx in range(len(available_filters), 4):
+            axes[idx].set_visible(False)
+
+        # Common axis labels
+        fig.supxlabel("Filter Capacity (elements)", fontsize=14, fontweight="bold")
+        fig.supylabel(
+            f"{metric_name} Throughput (% of Peak)", fontsize=14, fontweight="bold"
+        )
+        fig.suptitle(
+            f"{metric_name} Throughput by Filter",
+            fontsize=16,
+            fontweight="bold",
+            y=1.02,
+        )
+
+        plt.tight_layout()
+
+        output_file = output_dir / f"sol_grid_{metric_col}.png"
+        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=True)
+        typer.secho(f"Saved {output_file}", fg=typer.colors.GREEN)
+        plt.close()
 
 
 if __name__ == "__main__":
