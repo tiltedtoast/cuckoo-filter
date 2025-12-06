@@ -73,9 +73,10 @@ def main(
     # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
 
-    # Dictionary: policy -> {load_factor: evictions_per_insert}
+    # Dictionary: policy -> {load_factor: value}
     eviction_data = defaultdict(dict)
     total_evictions_data = defaultdict(dict)
+    throughput_data = defaultdict(dict)
 
     for _, row in df.iterrows():
         name = row["name"]
@@ -88,14 +89,21 @@ def main(
 
         evictions_per_insert = row.get("evictions_per_insert")
         evictions = row.get("evictions")
+        items_per_second = row.get("items_per_second")
 
         if pd.notna(evictions_per_insert):
             eviction_data[policy][load_factor] = evictions_per_insert
         if pd.notna(evictions):
             total_evictions_data[policy][load_factor] = evictions
+        if pd.notna(items_per_second):
+            throughput_data[policy][load_factor] = items_per_second
 
     if not eviction_data:
         typer.secho("No eviction data found in CSV", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    if not throughput_data:
+        typer.secho("No throughput data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
     # Determine output directory
@@ -105,7 +113,6 @@ def main(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Define styles for each policy
     policy_styles = {
         "BFS": {"color": "#2E86AB", "marker": "o", "linestyle": "-"},
         "DFS": {"color": "#A23B72", "marker": "s", "linestyle": "--"},
@@ -132,7 +139,6 @@ def main(
 
     ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
     ax.set_ylabel("Evictions per Insert", fontsize=14, fontweight="bold")
-    ax.set_xlim(0.0, 1.0)
     ax.set_yscale("log")
     ax.grid(True, which="both", ls="--", alpha=0.3)
     ax.legend(fontsize=12, loc="upper left", framealpha=0)
@@ -167,7 +173,6 @@ def main(
 
         ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
         ax.set_ylabel("Total Evictions", fontsize=14, fontweight="bold")
-        ax.set_xlim(0.0, 1.0)
         ax.set_yscale("log")
         ax.grid(True, which="both", ls="--", alpha=0.3)
         ax.legend(fontsize=12, loc="upper left", framealpha=0)
@@ -178,6 +183,39 @@ def main(
         output_file = output_dir / "eviction_total.png"
         plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=True)
         typer.secho(f"Total evictions plot saved to {output_file}", fg=typer.colors.GREEN)
+        plt.close()
+
+    # Plot 3: Throughput (items per second) vs load factor
+    if throughput_data:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        for policy in sorted(throughput_data.keys()):
+            load_factors = sorted(throughput_data[policy].keys())
+            throughputs = [throughput_data[policy][lf] / 1e6 for lf in load_factors]  # Convert to millions
+
+            style = policy_styles.get(policy, {"marker": "o", "linestyle": "-"})
+            ax.plot(
+                load_factors,
+                throughputs,
+                label=policy,
+                linewidth=2.5,
+                markersize=8,
+                color=style.get("color"),
+                marker=style.get("marker", "o"),
+                linestyle=style.get("linestyle", "-"),
+            )
+
+        ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
+        ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
+        ax.grid(True, which="both", ls="--", alpha=0.3)
+        ax.legend(fontsize=12, loc="upper right", framealpha=0)
+        ax.set_title("Insert Throughput vs Load Factor (75% Pre-filled)", fontsize=16, fontweight="bold")
+
+        plt.tight_layout()
+
+        output_file = output_dir / "eviction_throughput.png"
+        plt.savefig(output_file, dpi=150, bbox_inches="tight", transparent=True)
+        typer.secho(f"Throughput plot saved to {output_file}", fg=typer.colors.GREEN)
         plt.close()
 
 
