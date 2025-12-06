@@ -147,6 +147,15 @@ if get_option('BUILD_BENCHMARKS') == true
     )
 
     executable(
+        'benchmark-eviction',
+        './benchmark/eviction_benchmark.cu',
+        dependencies: bench_deps,
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
+
+    executable(
         'benchmark-cuckoo-ipc-overhead',
         './benchmark/cuckoo_ipc_overhead.cu',
         dependencies: bench_deps,

@@ -99,7 +99,7 @@ def main(
     Generate throughput vs load factor plots from benchmark CSV results.
 
     Creates three plots: insert, query, and delete performance across different
-    filter fill fractions for various AMQ implementations.
+    Load Factors for various AMQ implementations.
 
     Examples:
         cat results.csv | plot_load_factor.py
@@ -225,7 +225,7 @@ def main(
                 linestyle=style.get("linestyle", "-"),
             )
 
-        ax.set_xlabel("Filter Fill Fraction", fontsize=14, fontweight="bold")
+        ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
         ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, which="both", ls="--", alpha=0.3)

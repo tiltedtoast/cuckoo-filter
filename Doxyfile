@@ -4,6 +4,7 @@ OUTPUT_DIRECTORY       = docs
 GENERATE_HTML          = YES
 GENERATE_LATEX         = NO
 FULL_PATH_NAMES        = NO
+PREDEFINED             = CUCKOO_FILTER_COUNT_EVICTIONS
 
 # Inputs
 INPUT                  = include

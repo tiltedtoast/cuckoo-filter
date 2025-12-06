@@ -13,6 +13,14 @@
 #include "hashutil.cuh"
 #include "helpers.cuh"
 
+/**
+ * @brief Eviction policy for the Cuckoo Filter.
+ */
+enum class EvictionPolicy {
+    BFS,  ///< Breadth-first search with DFS fallback (default)
+    DFS   ///< Pure depth-first search
+};
+
 #if __has_include(<thrust/device_vector.h>)
     #include <thrust/device_vector.h>
     #define CUCKOO_FILTER_HAS_THRUST 1
@@ -37,13 +45,15 @@ template <
     size_t maxEvictions_ = 500,
     size_t blockSize_ = 256,
     size_t bucketSize_ = 16,
-    template <typename, typename, size_t, size_t> class AltBucketPolicy_ = XorAltBucketPolicy>
+    template <typename, typename, size_t, size_t> class AltBucketPolicy_ = XorAltBucketPolicy,
+    EvictionPolicy evictionPolicy_ = EvictionPolicy::BFS>
 struct CuckooConfig {
     using KeyType = T;
     static constexpr size_t bitsPerTag = bitsPerTag_;
     static constexpr size_t maxEvictions = maxEvictions_;
     static constexpr size_t blockSize = blockSize_;
     static constexpr size_t bucketSize = bucketSize_;
+    static constexpr EvictionPolicy evictionPolicy = evictionPolicy_;
 
     using TagType = typename std::conditional<
         bitsPerTag <= 8,
@@ -287,6 +297,11 @@ struct CuckooFilter {
     cuda::std::atomic<size_t>*
         d_numOccupied{};  ///< Pointer to the device memory for the occupancy counter
 
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+    cuda::std::atomic<size_t>*
+        d_numEvictions{};  ///< Pointer to the device memory for the eviction counter
+#endif
+
     size_t h_numOccupied = 0;  ///< Number of occupied buckets in the filter
 
     template <typename H>
@@ -325,6 +340,9 @@ struct CuckooFilter {
     explicit CuckooFilter(size_t capacity) : numBuckets(calculateNumBuckets(capacity)) {
         CUDA_CALL(cudaMalloc(&d_buckets, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMalloc(&d_numOccupied, sizeof(cuda::std::atomic<size_t>)));
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+        CUDA_CALL(cudaMalloc(&d_numEvictions, sizeof(cuda::std::atomic<size_t>)));
+#endif
 
         clear();
     }
@@ -341,6 +359,11 @@ struct CuckooFilter {
         if (d_numOccupied) {
             CUDA_CALL(cudaFree(d_numOccupied));
         }
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+        if (d_numEvictions) {
+            CUDA_CALL(cudaFree(d_numEvictions));
+        }
+#endif
     }
 
     /**
@@ -572,6 +595,9 @@ struct CuckooFilter {
     void clear() {
         CUDA_CALL(cudaMemset(d_buckets, 0, numBuckets * sizeof(Bucket)));
         CUDA_CALL(cudaMemset(d_numOccupied, 0, sizeof(cuda::std::atomic<size_t>)));
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+        CUDA_CALL(cudaMemset(d_numEvictions, 0, sizeof(cuda::std::atomic<size_t>)));
+#endif
         h_numOccupied = 0;
     }
 
@@ -596,6 +622,28 @@ struct CuckooFilter {
         );
         return h_numOccupied;
     }
+
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+    /**
+     * @brief Returns the total number of evictions performed.
+     *
+     * Only available when CUCKOO_FILTER_COUNT_EVICTIONS is defined.
+     *
+     * @return size_t Number of evictions.
+     */
+    size_t evictionCount() {
+        size_t count;
+        CUDA_CALL(cudaMemcpy(&count, d_numEvictions, sizeof(size_t), cudaMemcpyDeviceToHost));
+        return count;
+    }
+
+    /**
+     * @brief Resets the eviction counter to zero.
+     */
+    void resetEvictionCount() {
+        CUDA_CALL(cudaMemset(d_numEvictions, 0, sizeof(cuda::std::atomic<size_t>)));
+    }
+#endif
 
     /**
      * @brief Returns the total capacity of the filter.
@@ -769,7 +817,7 @@ struct CuckooFilter {
      * @param startBucket Index of the bucket to start the search from
      * @return true if the insertion was successful, false otherwise
      */
-    __device__ bool insertWithEviction(TagType fp, size_t startBucket) {
+    __device__ bool insertWithEvictionDFS(TagType fp, size_t startBucket) {
         TagType currentFp = fp;
         size_t currentBucket = startBucket;
 
@@ -790,6 +838,10 @@ struct CuckooFilter {
             } while (!bucket.packedTags[evictWord].compare_exchange_strong(
                 expected, desired, cuda::memory_order_relaxed, cuda::memory_order_relaxed
             ));
+
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+            d_numEvictions->fetch_add(1, cuda::memory_order_relaxed);
+#endif
 
             currentFp = evictedFp;
             currentBucket = getAlternateBucket(currentBucket, evictedFp, numBuckets);
@@ -848,6 +900,9 @@ struct CuckooFilter {
                             cuda::memory_order_relaxed,
                             cuda::memory_order_relaxed
                         )) {
+#ifdef CUCKOO_FILTER_COUNT_EVICTIONS
+                        d_numEvictions->fetch_add(1, cuda::memory_order_relaxed);
+#endif
                         return true;
                     }
                 }
@@ -858,7 +913,7 @@ struct CuckooFilter {
         }
 
         // fall back to greedy DFS
-        return insertWithEviction(fp, startBucket);
+        return insertWithEvictionDFS(fp, startBucket);
     }
 
     /**
@@ -878,7 +933,11 @@ struct CuckooFilter {
 
         auto startBucket = (fp & 1) == 0 ? i1 : i2;
 
-        return insertWithEvictionBFS(fp, startBucket);
+        if constexpr (Config::evictionPolicy == EvictionPolicy::BFS) {
+            return insertWithEvictionBFS(fp, startBucket);
+        } else {
+            return insertWithEvictionDFS(fp, startBucket);
+        }
     }
 
     /**
@@ -1030,7 +1089,12 @@ __global__ void insertKernelSorted(
                 success = 1;
             } else {
                 auto startBucket = (fp & 1) == 0 ? primaryBucket : secondaryBucket;
-                success = filter->insertWithEviction(fp, startBucket);
+
+                if constexpr (Config::evictionPolicy == EvictionPolicy::BFS) {
+                    success = filter->insertWithEvictionBFS(fp, startBucket);
+                } else {
+                    success = filter->insertWithEvictionDFS(fp, startBucket);
+                }
             }
         }
     }
