@@ -1,24 +1,17 @@
 #include <benchmark/benchmark.h>
-#include <cuckoofilter.h>
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/reduce.h>
 #include <bulk_tcf_host.cuh>
-#include <cstddef>
-#include <cstdint>
 #include <CuckooFilter.cuh>
 #include <cuco/bloom_filter.cuh>
 #include <cuda/std/cstdint>
-#include <filter.hpp>
 #include <gqf.cuh>
 #include <gqf_int.cuh>
-#include <hash_strategies.cuh>
-#include <helpers.cuh>
 #include <random>
 #include <thread>
 #include "benchmark_common.cuh"
-#include "parameter/parameter.hpp"
 
 namespace bm = benchmark;
 
@@ -180,55 +173,43 @@ static void GPUCF_Insert_Sweep(bm::State& state) {
 }
 
 template <size_t bitsPerTag, int loadFactorPercent>
-static void CPUCF_FPR_Sweep(bm::State& state) {
+static void GPUCF_PositiveQuery_Sweep(bm::State& state) {
+    using Config = GPUCuckooConfig<bitsPerTag>;
     constexpr double loadFactor = loadFactorPercent / 100.0;
 
-    CPUTimer timer;
+    GPUTimer timer;
     auto n = static_cast<size_t>(FIXED_CAPACITY * loadFactor);
 
-    auto keys = generateKeysCPU<uint64_t>(n, 42, 0, UINT32_MAX);
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPURange(d_keys, n, uint64_t(0), uint64_t(UINT32_MAX));
 
-    cuckoofilter::CuckooFilter<uint64_t, bitsPerTag> filter(FIXED_CAPACITY);
-    for (const auto& k : keys) {
-        filter.Add(k);
-    }
+    auto filter = std::make_unique<CuckooFilter<Config>>(FIXED_CAPACITY);
+    size_t filterMemory = filter->sizeInBytes();
+    adaptiveInsert(*filter, d_keys);
 
-    auto& testData = getFPRTestData();
-    size_t totalFalsePositives = 0;
-    size_t iterations = 0;
+    // Use the inserted keys for positive lookups
+    thrust::device_vector<uint8_t> d_output(n);
 
     for (auto _ : state) {
         timer.start();
-        size_t falsePositives = 0;
-        for (const auto& k : testData.h_negative_keys) {
-            if (filter.Contain(k) == cuckoofilter::Ok) {
-                ++falsePositives;
-            }
-        }
+        filter->containsMany(d_keys, d_output);
         double elapsed = timer.elapsed();
 
-        totalFalsePositives += falsePositives;
-        ++iterations;
-
         state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(falsePositives);
+        bm::DoNotOptimize(d_output.data().get());
     }
 
-    double avgFalsePositives =
-        static_cast<double>(totalFalsePositives) / static_cast<double>(iterations);
-    double fpr = avgFalsePositives / static_cast<double>(FPR_TEST_SIZE);
-    size_t filterMemory = filter.SizeInBytes();
-
-    setFPRSweepCounters(
-        state,
-        filterMemory,
-        n,
-        fpr,
-        static_cast<size_t>(avgFalsePositives),
-        FPR_TEST_SIZE,
-        bitsPerTag,
-        loadFactor
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
+    state.counters["memory_bytes"] = benchmark::Counter(
+        static_cast<double>(filterMemory),
+        benchmark::Counter::kDefaults,
+        benchmark::Counter::kIs1024
     );
+    state.counters["bits_per_item"] =
+        benchmark::Counter(static_cast<double>(filterMemory * 8) / static_cast<double>(n));
+    state.counters["num_items"] = benchmark::Counter(static_cast<double>(n));
+    state.counters["fingerprint_bits"] = benchmark::Counter(static_cast<double>(bitsPerTag));
+    state.counters["load_factor"] = benchmark::Counter(loadFactor * 100);
 }
 
 using BloomFilter = cuco::bloom_filter<uint64_t>;
@@ -430,72 +411,6 @@ static void GQF_FPR_Sweep(bm::State& state) {
     qf_destroy_device(qf);
 }
 
-template <size_t bitsPerTag, int loadFactorPercent>
-static void PartitionedCF_FPR_Sweep(bm::State& state) {
-    using CPUFilterParam = filters::cuckoo::Standard4<bitsPerTag>;
-    using CPUOptimParam = filters::parameter::PowerOfTwoMurmurScalar64PartitionedMT;
-    using PartitionedCuckooFilter =
-        filters::Filter<filters::FilterType::Cuckoo, CPUFilterParam, bitsPerTag, CPUOptimParam>;
-    constexpr double loadFactor = loadFactorPercent / 100.0;
-
-    CPUTimer timer;
-    auto n = static_cast<size_t>(FIXED_CAPACITY * loadFactor);
-    auto keys = generateKeysCPU<uint64_t>(n, 42, 0, UINT32_MAX);
-
-    auto s = static_cast<size_t>(100.0 / loadFactor);
-    size_t expectedSize = (FIXED_CAPACITY * bitsPerTag * s) / 800;
-    size_t n_partitions = 1;
-
-    if (expectedSize > L2_CACHE_SIZE) {
-        size_t partitionsNeeded = SDIV(expectedSize, L2_CACHE_SIZE);
-        while (n_partitions < partitionsNeeded) {
-            n_partitions *= 2;
-        }
-    }
-
-    size_t n_threads = std::min(n_partitions, size_t(std::thread::hardware_concurrency()));
-
-    PartitionedCuckooFilter filter(s, n_partitions, n_threads, 1);
-    filter.construct(keys.data(), keys.size());
-
-    auto& testData = getFPRTestData();
-    size_t totalFalsePositives = 0;
-    size_t iterations = 0;
-
-    for (auto _ : state) {
-        timer.start();
-        size_t falsePositives = 0;
-        for (const auto& k : testData.h_negative_keys) {
-            if (filter.contains(k)) {
-                ++falsePositives;
-            }
-        }
-        double elapsed = timer.elapsed();
-
-        totalFalsePositives += falsePositives;
-        ++iterations;
-
-        state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(falsePositives);
-    }
-
-    double avgFalsePositives =
-        static_cast<double>(totalFalsePositives) / static_cast<double>(iterations);
-    double fpr = avgFalsePositives / static_cast<double>(FPR_TEST_SIZE);
-    size_t filterMemory = filter.size();
-
-    setFPRSweepCounters(
-        state,
-        filterMemory,
-        n,
-        fpr,
-        static_cast<size_t>(avgFalsePositives),
-        FPR_TEST_SIZE,
-        bitsPerTag,
-        loadFactor
-    );
-}
-
 template <int bitsPerElement, int loadFactorPercent>
 static void Bloom_Insert_Sweep(bm::State& state) {
     constexpr double loadFactor = loadFactorPercent / 100.0;
@@ -630,6 +545,150 @@ static void GQF_Insert_Sweep(bm::State& state) {
     state.counters["load_factor"] = benchmark::Counter(loadFactor * 100);
 }
 
+template <int bitsPerElement, int loadFactorPercent>
+static void Bloom_PositiveQuery_Sweep(bm::State& state) {
+    constexpr double loadFactor = loadFactorPercent / 100.0;
+    constexpr size_t bitsPerBlock =
+        BloomFilter::words_per_block * sizeof(typename BloomFilter::word_type) * 8;
+
+    GPUTimer timer;
+    auto n = static_cast<size_t>(FIXED_CAPACITY * loadFactor);
+    size_t numBlocks = std::max(1UL, SDIV(n * bitsPerElement, bitsPerBlock));
+
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPURange(d_keys, n, uint64_t(0), uint64_t(UINT32_MAX));
+
+    auto filter = std::make_unique<BloomFilter>(numBlocks);
+    size_t filterMemory = filter->block_extent() * BloomFilter::words_per_block *
+                          sizeof(typename BloomFilter::word_type);
+    filter->add(d_keys.begin(), d_keys.end());
+
+    thrust::device_vector<uint8_t> d_output(n);
+
+    for (auto _ : state) {
+        timer.start();
+        filter->contains(
+            d_keys.begin(),
+            d_keys.end(),
+            reinterpret_cast<bool*>(thrust::raw_pointer_cast(d_output.data()))
+        );
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(d_output.data().get());
+    }
+
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
+    state.counters["memory_bytes"] = benchmark::Counter(
+        static_cast<double>(filterMemory),
+        benchmark::Counter::kDefaults,
+        benchmark::Counter::kIs1024
+    );
+    state.counters["bits_per_item"] =
+        benchmark::Counter(static_cast<double>(filterMemory * 8) / static_cast<double>(n));
+    state.counters["num_items"] = benchmark::Counter(static_cast<double>(n));
+    state.counters["fingerprint_bits"] = benchmark::Counter(static_cast<double>(bitsPerElement));
+    state.counters["load_factor"] = benchmark::Counter(loadFactor * 100);
+}
+
+template <typename FingerprintType, int loadFactorPercent>
+static void TCF_PositiveQuery_Sweep(bm::State& state) {
+    using TCFType = host_bulk_tcf<uint64_t, FingerprintType>;
+    constexpr double loadFactor = loadFactorPercent / 100.0;
+    constexpr size_t fingerprintBits = sizeof(FingerprintType) * 8;
+    constexpr double TCF_CAPACITY_FACTOR = 0.85;
+
+    GPUTimer timer;
+    auto n = static_cast<size_t>(FIXED_CAPACITY * loadFactor);
+    auto requiredUsableCapacity = static_cast<size_t>(n / loadFactor);
+    auto capacity = static_cast<size_t>(requiredUsableCapacity / TCF_CAPACITY_FACTOR);
+
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPURange(d_keys, n, uint64_t(0), uint64_t(UINT32_MAX));
+
+    TCFType* filter = TCFType::host_build_tcf(capacity);
+    size_t filterMemory = capacity * sizeof(FingerprintType);
+
+    uint64_t* d_misses;
+    cudaMalloc(&d_misses, sizeof(uint64_t));
+    cudaMemset(d_misses, 0, sizeof(uint64_t));
+    filter->bulk_insert(thrust::raw_pointer_cast(d_keys.data()), n, d_misses);
+
+    for (auto _ : state) {
+        timer.start();
+        bool* d_output = filter->bulk_query(thrust::raw_pointer_cast(d_keys.data()), n);
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(d_output);
+        cudaFree(d_output);
+    }
+
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
+    state.counters["memory_bytes"] = benchmark::Counter(
+        static_cast<double>(filterMemory),
+        benchmark::Counter::kDefaults,
+        benchmark::Counter::kIs1024
+    );
+    state.counters["bits_per_item"] =
+        benchmark::Counter(static_cast<double>(filterMemory * 8) / static_cast<double>(n));
+    state.counters["num_items"] = benchmark::Counter(static_cast<double>(n));
+    state.counters["fingerprint_bits"] = benchmark::Counter(static_cast<double>(fingerprintBits));
+    state.counters["load_factor"] = benchmark::Counter(loadFactor * 100);
+
+    cudaFree(d_misses);
+    TCFType::host_free_tcf(filter);
+}
+
+template <int loadFactorPercent>
+static void GQF_PositiveQuery_Sweep(bm::State& state) {
+    constexpr double loadFactor = loadFactorPercent / 100.0;
+
+    GPUTimer timer;
+    auto q = static_cast<uint32_t>(std::log2(FIXED_CAPACITY));
+    size_t capacity = 1ULL << q;
+    auto n = static_cast<size_t>(capacity * loadFactor);
+
+    thrust::device_vector<uint64_t> d_keys(n);
+    generateKeysGPURange(d_keys, n, uint64_t(0), uint64_t(UINT32_MAX));
+
+    QF* qf;
+    qf_malloc_device(&qf, q, true);
+    bulk_insert(qf, n, thrust::raw_pointer_cast(d_keys.data()), 0);
+    cudaDeviceSynchronize();
+
+    size_t filterMemory = getQFSizeHost(qf);
+    thrust::device_vector<uint64_t> d_results(n);
+
+    for (auto _ : state) {
+        timer.start();
+        bulk_get(
+            qf,
+            n,
+            thrust::raw_pointer_cast(d_keys.data()),
+            thrust::raw_pointer_cast(d_results.data())
+        );
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(d_results.data().get());
+    }
+
+    state.SetItemsProcessed(static_cast<int64_t>(state.iterations() * n));
+    state.counters["memory_bytes"] = benchmark::Counter(
+        static_cast<double>(filterMemory),
+        benchmark::Counter::kDefaults,
+        benchmark::Counter::kIs1024
+    );
+    state.counters["bits_per_item"] =
+        benchmark::Counter(static_cast<double>(filterMemory * 8) / static_cast<double>(n));
+    state.counters["num_items"] = benchmark::Counter(static_cast<double>(n));
+    state.counters["fingerprint_bits"] = benchmark::Counter(static_cast<double>(GQF_BITS));
+    state.counters["load_factor"] = benchmark::Counter(loadFactor * 100);
+
+    qf_destroy_device(qf);
+}
+
 #define FPR_SWEEP_CONFIG     \
     ->Unit(bm::kMillisecond) \
         ->UseManualTime()    \
@@ -641,13 +700,16 @@ static void GQF_Insert_Sweep(bm::State& state) {
 
 #if GQF_BITS == 8
 
-    #define REGISTER_GPUCF_FOR_LOAD_FACTOR(LF)                  \
-        BENCHMARK(GPUCF_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;     \
-        BENCHMARK(GPUCF_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(GPUCF_FPR_Sweep<32, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(GPUCF_Insert_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
-        BENCHMARK(GPUCF_Insert_Sweep<16, LF>) FPR_SWEEP_CONFIG; \
-        BENCHMARK(GPUCF_Insert_Sweep<32, LF>) FPR_SWEEP_CONFIG;
+    #define REGISTER_GPUCF_FOR_LOAD_FACTOR(LF)                         \
+        BENCHMARK(GPUCF_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;            \
+        BENCHMARK(GPUCF_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(GPUCF_FPR_Sweep<32, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(GPUCF_Insert_Sweep<8, LF>) FPR_SWEEP_CONFIG;         \
+        BENCHMARK(GPUCF_Insert_Sweep<16, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(GPUCF_Insert_Sweep<32, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(GPUCF_PositiveQuery_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
+        BENCHMARK(GPUCF_PositiveQuery_Sweep<16, LF>) FPR_SWEEP_CONFIG; \
+        BENCHMARK(GPUCF_PositiveQuery_Sweep<32, LF>) FPR_SWEEP_CONFIG;
 
 REGISTER_GPUCF_FOR_LOAD_FACTOR(35)
 REGISTER_GPUCF_FOR_LOAD_FACTOR(40)
@@ -657,26 +719,16 @@ REGISTER_GPUCF_FOR_LOAD_FACTOR(85)
 REGISTER_GPUCF_FOR_LOAD_FACTOR(90)
 REGISTER_GPUCF_FOR_LOAD_FACTOR(95)
 
-    #define REGISTER_CPUCF_FOR_LOAD_FACTOR(LF)               \
-        BENCHMARK(CPUCF_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
-        BENCHMARK(CPUCF_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG; \
-        BENCHMARK(CPUCF_FPR_Sweep<32, LF>) FPR_SWEEP_CONFIG;
-
-REGISTER_CPUCF_FOR_LOAD_FACTOR(35)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(40)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(50)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(75)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(85)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(90)
-REGISTER_CPUCF_FOR_LOAD_FACTOR(95)
-
-    #define REGISTER_BLOOM_FOR_LOAD_FACTOR(LF)                  \
-        BENCHMARK(Bloom_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;     \
-        BENCHMARK(Bloom_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(Bloom_FPR_Sweep<32, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(Bloom_Insert_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
-        BENCHMARK(Bloom_Insert_Sweep<16, LF>) FPR_SWEEP_CONFIG; \
-        BENCHMARK(Bloom_Insert_Sweep<32, LF>) FPR_SWEEP_CONFIG;
+    #define REGISTER_BLOOM_FOR_LOAD_FACTOR(LF)                         \
+        BENCHMARK(Bloom_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;            \
+        BENCHMARK(Bloom_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(Bloom_FPR_Sweep<32, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(Bloom_Insert_Sweep<8, LF>) FPR_SWEEP_CONFIG;         \
+        BENCHMARK(Bloom_Insert_Sweep<16, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(Bloom_Insert_Sweep<32, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(Bloom_PositiveQuery_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
+        BENCHMARK(Bloom_PositiveQuery_Sweep<16, LF>) FPR_SWEEP_CONFIG; \
+        BENCHMARK(Bloom_PositiveQuery_Sweep<32, LF>) FPR_SWEEP_CONFIG;
 
 REGISTER_BLOOM_FOR_LOAD_FACTOR(35)
 REGISTER_BLOOM_FOR_LOAD_FACTOR(40)
@@ -686,13 +738,16 @@ REGISTER_BLOOM_FOR_LOAD_FACTOR(85)
 REGISTER_BLOOM_FOR_LOAD_FACTOR(90)
 REGISTER_BLOOM_FOR_LOAD_FACTOR(95)
 
-    #define REGISTER_TCF_FOR_LOAD_FACTOR(LF)                        \
-        BENCHMARK(TCF_FPR_Sweep<uint8_t, LF>) FPR_SWEEP_CONFIG;     \
-        BENCHMARK(TCF_FPR_Sweep<uint16_t, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(TCF_FPR_Sweep<uint32_t, LF>) FPR_SWEEP_CONFIG;    \
-        BENCHMARK(TCF_Insert_Sweep<uint8_t, LF>) FPR_SWEEP_CONFIG;  \
-        BENCHMARK(TCF_Insert_Sweep<uint16_t, LF>) FPR_SWEEP_CONFIG; \
-        BENCHMARK(TCF_Insert_Sweep<uint32_t, LF>) FPR_SWEEP_CONFIG;
+    #define REGISTER_TCF_FOR_LOAD_FACTOR(LF)                               \
+        BENCHMARK(TCF_FPR_Sweep<uint8_t, LF>) FPR_SWEEP_CONFIG;            \
+        BENCHMARK(TCF_FPR_Sweep<uint16_t, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(TCF_FPR_Sweep<uint32_t, LF>) FPR_SWEEP_CONFIG;           \
+        BENCHMARK(TCF_Insert_Sweep<uint8_t, LF>) FPR_SWEEP_CONFIG;         \
+        BENCHMARK(TCF_Insert_Sweep<uint16_t, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(TCF_Insert_Sweep<uint32_t, LF>) FPR_SWEEP_CONFIG;        \
+        BENCHMARK(TCF_PositiveQuery_Sweep<uint8_t, LF>) FPR_SWEEP_CONFIG;  \
+        BENCHMARK(TCF_PositiveQuery_Sweep<uint16_t, LF>) FPR_SWEEP_CONFIG; \
+        BENCHMARK(TCF_PositiveQuery_Sweep<uint32_t, LF>) FPR_SWEEP_CONFIG;
 
 REGISTER_TCF_FOR_LOAD_FACTOR(35)
 REGISTER_TCF_FOR_LOAD_FACTOR(40)
@@ -701,21 +756,6 @@ REGISTER_TCF_FOR_LOAD_FACTOR(75)
 REGISTER_TCF_FOR_LOAD_FACTOR(85)
 REGISTER_TCF_FOR_LOAD_FACTOR(90)
 REGISTER_TCF_FOR_LOAD_FACTOR(95)
-
-    // Note: Partitioned CF only supports up to 16-bit fingerprints with 64-bit registers
-    // (4 slots * 16 bits = 64 bits max, 4 * 32 = 128 > 64 fails)
-    #define REGISTER_PARTITIONED_FOR_LOAD_FACTOR(LF)                 \
-        BENCHMARK(PartitionedCF_FPR_Sweep<8, LF>) FPR_SWEEP_CONFIG;  \
-        BENCHMARK(PartitionedCF_FPR_Sweep<12, LF>) FPR_SWEEP_CONFIG; \
-        BENCHMARK(PartitionedCF_FPR_Sweep<16, LF>) FPR_SWEEP_CONFIG;
-
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(35)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(40)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(50)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(75)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(85)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(90)
-REGISTER_PARTITIONED_FOR_LOAD_FACTOR(95)
 
 #endif  // GQF_BITS == 8
 
@@ -736,5 +776,13 @@ BENCHMARK(GQF_Insert_Sweep<75>) FPR_SWEEP_CONFIG;
 BENCHMARK(GQF_Insert_Sweep<85>) FPR_SWEEP_CONFIG;
 BENCHMARK(GQF_Insert_Sweep<90>) FPR_SWEEP_CONFIG;
 BENCHMARK(GQF_Insert_Sweep<95>) FPR_SWEEP_CONFIG;
+
+BENCHMARK(GQF_PositiveQuery_Sweep<35>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<40>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<50>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<75>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<85>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<90>) FPR_SWEEP_CONFIG;
+BENCHMARK(GQF_PositiveQuery_Sweep<95>) FPR_SWEEP_CONFIG;
 
 STANDARD_BENCHMARK_MAIN();
