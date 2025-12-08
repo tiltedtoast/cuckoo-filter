@@ -216,7 +216,7 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-fpr-sweep-gqf8',
         './benchmark/fpr_sweep_benchmark.cu',
-        dependencies: bench_deps + [cuco_dep, tcf_dep, cpu_cuckoo_dep, gqf_dep_8],
+        dependencies: bench_deps + [cuco_dep, tcf_dep, gqf_dep_8],
         include_directories: includes,
         cuda_args: cuda_args + ['-w', '-DGQF_BITS=8'],
         install: false,
@@ -225,7 +225,7 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-fpr-sweep-gqf16',
         './benchmark/fpr_sweep_benchmark.cu',
-        dependencies: bench_deps + [cuco_dep, tcf_dep, cpu_cuckoo_dep, gqf_dep_16],
+        dependencies: bench_deps + [cuco_dep, tcf_dep, gqf_dep_16],
         include_directories: includes,
         cuda_args: cuda_args + ['-w', '-DGQF_BITS=16'],
         install: false,
@@ -234,7 +234,7 @@ if get_option('BUILD_BENCHMARKS') == true
     executable(
         'benchmark-fpr-sweep-gqf32',
         './benchmark/fpr_sweep_benchmark.cu',
-        dependencies: bench_deps + [cuco_dep, tcf_dep, cpu_cuckoo_dep, gqf_dep_32],
+        dependencies: bench_deps + [cuco_dep, tcf_dep, gqf_dep_32],
         include_directories: includes,
         cuda_args: cuda_args + ['-w', '-DGQF_BITS=32'],
         install: false,
