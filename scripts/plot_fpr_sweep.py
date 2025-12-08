@@ -8,16 +8,6 @@
 #   "typer",
 # ]
 # ///
-"""
-Plot FPR sweep benchmark results to compare filters at similar FPR/space tradeoffs.
-
-Usage:
-    ./benchmark-fpr-sweep --benchmark_format=csv > benchmark_fpr_sweep.csv
-    python scripts/plot_fpr_sweep.py benchmark_fpr_sweep.csv
-
-This generates a heatmap showing the fastest filter at each (FPR, space overhead) combination,
-similar to Figure 1 from filter comparison papers.
-"""
 
 import sys
 from pathlib import Path
