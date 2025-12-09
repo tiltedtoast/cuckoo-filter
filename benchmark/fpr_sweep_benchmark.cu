@@ -705,11 +705,12 @@ static void TCF_Delete_Sweep(bm::State& state) {
         filter->bulk_insert(thrust::raw_pointer_cast(d_keys.data()), n, d_misses);
 
         timer.start();
-        filter->bulk_delete(thrust::raw_pointer_cast(d_keys.data()), n);
+        bool* d_output = filter->bulk_delete(thrust::raw_pointer_cast(d_keys.data()), n);
         double elapsed = timer.elapsed();
 
         state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(filter);
+        bm::DoNotOptimize(d_output);
+        cudaFree(d_output);
 
         cudaFree(d_misses);
         TCFType::host_free_tcf(filter);
