@@ -101,5 +101,4 @@ src/               - Example applications
 benchmark/         - benchmarks
 tests/             - Unit tests
 scripts/           - Scripts for running/plotting benchmarks
-
 ```
