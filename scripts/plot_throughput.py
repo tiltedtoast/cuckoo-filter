@@ -97,7 +97,8 @@ def main(
 
         suffix = base_name.rsplit("_", 1)[-1]
         if not re.fullmatch(
-            r"(?:Query|Insert|Delete|)(?:Sorted|Unsorted)(?:AddSub)?(<\d+>)?", suffix
+            r"(?:Query|Insert|Delete)(?:Sorted|Unsorted)?(?:AddSub)?(<\d+>)?",
+            suffix,
         ):
             continue
 
