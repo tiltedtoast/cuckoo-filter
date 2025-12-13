@@ -14,7 +14,7 @@
 #include <random>
 #include <string_view>
 #include "CuckooFilterMultiGPU.cuh"
-#include "hash_strategies.cuh"
+#include "bucket_policies.cuh"
 #include "helpers.cuh"
 
 int main(int argc, char** argv) {

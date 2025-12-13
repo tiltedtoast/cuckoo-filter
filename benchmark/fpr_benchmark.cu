@@ -14,7 +14,7 @@
 #include <filter.hpp>
 #include <gqf.cuh>
 #include <gqf_int.cuh>
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <helpers.cuh>
 #include <random>
 #include <thread>

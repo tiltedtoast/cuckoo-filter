@@ -9,7 +9,7 @@
 #include <cuco/bloom_filter.cuh>
 #include <cuco/utility/cuda_thread_scope.cuh>
 #include <cuda/std/cstdint>
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <helpers.cuh>
 #include <random>
 #include "benchmark_common.cuh"

@@ -8,7 +8,7 @@
 #include <CuckooFilter.cuh>
 #include <cuda/std/cstdint>
 
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <helpers.cuh>
 #include <random>
 #include "benchmark_common.cuh"

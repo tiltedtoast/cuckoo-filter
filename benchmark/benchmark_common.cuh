@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <CuckooFilter.cuh>
 #include <fstream>
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <limits>
 #include <random>
 #include <string>

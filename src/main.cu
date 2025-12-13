@@ -10,7 +10,7 @@
 #include <CuckooFilter.cuh>
 #include <cuda/std/cstddef>
 #include <cuda/std/cstdint>
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <helpers.cuh>
 #include <iostream>
 #include <random>

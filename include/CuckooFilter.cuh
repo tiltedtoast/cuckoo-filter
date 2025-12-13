@@ -9,7 +9,7 @@
 #include <cuda/std/cstdint>
 #include <iostream>
 #include <vector>
-#include "hash_strategies.cuh"
+#include "bucket_policies.cuh"
 #include "hashutil.cuh"
 #include "helpers.cuh"
 

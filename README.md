@@ -95,7 +95,7 @@ include/           - Header files
   CuckooFilter.cuh           - Main filter implementation
   CuckooFilterMultiGPU.cuh   - Multi-GPU implementation
   CuckooFilterIPC.cuh        - IPC support
-  hash_strategies.cuh        - Hashing and bucket policies
+  bucket_policies.cuh        - Alternative bucket policies
   helpers.cuh                - Helper functions
 src/               - Example applications
 benchmark/         - benchmarks

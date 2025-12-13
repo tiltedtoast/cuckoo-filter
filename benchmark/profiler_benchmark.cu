@@ -9,7 +9,7 @@
 #include <cuco/bloom_filter.cuh>
 #include <gqf.cuh>
 #include <gqf_int.cuh>
-#include <hash_strategies.cuh>
+#include <bucket_policies.cuh>
 #include <helpers.cuh>
 #include <iostream>
 #include <string>
