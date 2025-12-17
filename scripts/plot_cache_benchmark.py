@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
-import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot cache benchmark results")
@@ -44,11 +44,7 @@ def main(
         plot_cache_benchmark.py cache_results.csv
         plot_cache_benchmark.py cache_results.csv -o custom/dir
     """
-    try:
-        df = pd.read_csv(csv_file)
-    except Exception as e:
-        typer.secho(f"Error reading CSV: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_file)
 
     # Validate required columns
     required_cols = ["filter", "operation", "capacity", "l1_hit_rate", "l2_hit_rate"]
@@ -60,29 +56,7 @@ def main(
         )
         raise typer.Exit(1)
 
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    filter_styles = {
-        "cuckoo": {"color": "#2E86AB", "marker": "o"},
-        "bloom": {"color": "#A23B72", "marker": "s"},
-        "tcf": {"color": "#C73E1D", "marker": "^"},
-        "gqf": {"color": "#F18F01", "marker": "D"},
-    }
-
-    # Display names for filters
-    filter_display_names = {
-        "cuckoo": "Cuckoo",
-        "bloom": "Blocked Bloom",
-        "tcf": "TCF",
-        "gqf": "GQF",
-    }
-
-    def get_filter_display_name(filter_type: str) -> str:
-        return filter_display_names.get(filter_type, filter_type.capitalize())
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     operation_linestyles = {
         "insert": "-",
@@ -105,12 +79,12 @@ def main(
                 capacities = filter_df["capacity"].values
                 hit_rates = filter_df[metric_col].values
 
-                style = filter_styles.get(filter_type, {})
+                style = pu.FILTER_STYLES.get(filter_type, {})
 
                 ax.plot(
                     capacities,
                     hit_rates,
-                    label=get_filter_display_name(filter_type),
+                    label=pu.get_filter_display_name(filter_type),
                     linewidth=2.5,
                     markersize=8,
                     color=style.get("color"),
@@ -173,7 +147,7 @@ def main(
             ax.set_xlabel("Capacity (elements)", fontsize=12, fontweight="bold")
             ax.set_ylabel(f"{cache_level} Hit Rate (%)", fontsize=12, fontweight="bold")
             ax.set_title(
-                f"{cache_level} Cache ({get_filter_display_name(filter_type)})",
+                f"{cache_level} Cache ({pu.get_filter_display_name(filter_type)})",
                 fontsize=14,
                 fontweight="bold",
             )
@@ -183,7 +157,7 @@ def main(
             ax.set_ylim(0, 105)
 
         plt.suptitle(
-            f"Cache Hit Rate vs. Capacity - {get_filter_display_name(filter_type)} Filter",
+            f"Cache Hit Rate vs. Capacity - {pu.get_filter_display_name(filter_type)} Filter",
             fontsize=16,
             fontweight="bold",
             y=1.00,
@@ -193,7 +167,7 @@ def main(
         output_file = output_dir / f"cache_{filter_type}_combined.pdf"
         plt.savefig(output_file, bbox_inches="tight")
         typer.secho(
-            f"{get_filter_display_name(filter_type)} combined plot saved to {output_file}",
+            f"{pu.get_filter_display_name(filter_type)} combined plot saved to {output_file}",
             fg=typer.colors.GREEN,
         )
         plt.close()
@@ -228,12 +202,12 @@ def main(
                 capacities = filter_df["capacity"].values
                 hit_rates = filter_df[metric_col].values
 
-                style = filter_styles.get(filter_type, {})
+                style = pu.FILTER_STYLES.get(filter_type, {})
 
                 ax.plot(
                     capacities,
                     hit_rates,
-                    label=get_filter_display_name(filter_type),
+                    label=pu.get_filter_display_name(filter_type),
                     linewidth=2.5,
                     markersize=8,
                     color=style.get("color"),
@@ -262,7 +236,7 @@ def main(
     legend_handles = []
     legend_labels = []
     for filter_type in all_filter_types:
-        style = filter_styles.get(filter_type, {})
+        style = pu.FILTER_STYLES.get(filter_type, {})
         handle = plt.Line2D(
             [0],
             [0],
@@ -270,10 +244,10 @@ def main(
             marker=style.get("marker", "o"),
             linewidth=2.5,
             markersize=8,
-            label=get_filter_display_name(filter_type),
+            label=pu.get_filter_display_name(filter_type),
         )
         legend_handles.append(handle)
-        legend_labels.append(get_filter_display_name(filter_type))
+        legend_labels.append(pu.get_filter_display_name(filter_type))
 
     # Add legend to top-right subplot
     axes[0, 1].legend(

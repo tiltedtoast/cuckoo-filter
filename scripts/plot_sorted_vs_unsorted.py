@@ -23,6 +23,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot sorted vs unsorted insertion benchmark results")
@@ -109,12 +110,7 @@ def main(
         typer.secho("No benchmark data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     # Create plot
     plt.rcParams.update(
@@ -170,13 +166,7 @@ def main(
     plt.tight_layout()
 
     output_file = output_dir / "sorted_vs_unsorted.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-    )
-    typer.secho(f"Plot saved to {output_file}", fg=typer.colors.GREEN)
+    pu.save_figure(None, output_file, f"Plot saved to {output_file}")
 
 
 if __name__ == "__main__":

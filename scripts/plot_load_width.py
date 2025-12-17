@@ -13,6 +13,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot 128-bit vs 256-bit load width benchmark results")
@@ -20,13 +21,19 @@ app = typer.Typer(help="Plot 128-bit vs 256-bit load width benchmark results")
 
 @app.command()
 def main(
-    csv_file: Path = typer.Argument(..., help="Path to CSV file"),
+    csv_file: Path = typer.Argument(
+        ...,
+        help="Path to CSV file",
+    ),
     output_dir: Optional[Path] = typer.Option(
-        None, "--output-dir", "-o", help="Output directory for plots"
+        None,
+        "--output-dir",
+        "-o",
+        help="Output directory for plots",
     ),
 ):
     """Generate comparison plot for 128-bit vs 256-bit load widths."""
-    df = pd.read_csv(csv_file)
+    df = pu.load_csv(csv_file)
     # Filter for median records only (format: "128bit/Query/65536/.../manual_time_median")
     df = df[df["name"].str.contains("_median")]
 
@@ -60,11 +67,10 @@ def main(
         typer.secho("No data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    if output_dir is None:
-        output_dir = Path(__file__).parent.parent / "build"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = pu.setup_figure(
+        figsize=(10, 6),
+        title="Query Throughput: 128-bit vs 256-bit Loads",
+    )
 
     colors = {"128-bit": "#E63946", "256-bit": "#2A9D8F"}
 
@@ -73,7 +79,7 @@ def main(
             continue
         sizes = sorted(benchmark_data[variant].keys())
         throughput = [benchmark_data[variant][s] for s in sizes]
-        ax.plot(
+        ax.plot(  # ty:ignore[possibly-missing-attribute]
             sizes,
             throughput,
             "o-",
@@ -83,25 +89,18 @@ def main(
             markersize=8,
         )
 
-    ax.set_xlabel("Input Size", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
-    ax.set_xscale("log", base=2)
-    ax.legend(fontsize=12, loc="best", framealpha=0)
-    ax.grid(True, which="both", ls="--", alpha=0.3)
-    ax.set_title(
-        "Query Throughput: 128-bit vs 256-bit Loads", fontsize=16, fontweight="bold"
+    pu.format_axis(
+        ax,  # ty:ignore[invalid-argument-type]
+        xlabel="Input Size",
+        ylabel="Throughput [M ops/s]",
+        xscale="log",
+        yscale=None,
     )
     plt.tight_layout()
 
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
     output_file = output_dir / "load_width_comparison.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    typer.secho(f"Plot saved to {output_file}", fg=typer.colors.GREEN)
+    pu.save_figure(None, output_file, f"Plot saved to {output_file}")
 
 
 if __name__ == "__main__":

@@ -14,28 +14,10 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot benchmark throughput results")
-
-
-def normalize_benchmark_name(name: str) -> str:
-    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
-    parts = name.split("/")
-    if len(parts) >= 2:
-        if "Fixture" in parts[0]:
-            # Convert "CFFixture/Insert/..." to "CF_Insert/..."
-            fixture_name = parts[0].replace("Fixture", "")
-            bench_name = parts[1]
-            parts[0] = f"{fixture_name}_{bench_name}"
-            parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
-        else:
-            # Convert "CF/InsertUnsorted/..." to "InsertUnsorted/..."
-            # Strip short fixture prefixes like "CF"
-            if len(parts[0]) <= 3 and parts[0].isupper():
-                parts[0] = parts[1]
-                parts.pop(1)
-    return "/".join(parts)
 
 
 @app.command()
@@ -78,7 +60,7 @@ def main(
 
     benchmark_data = defaultdict(dict)
     for _, row in df.iterrows():
-        name = normalize_benchmark_name(row["name"])
+        name = pu.normalize_benchmark_name(row["name"])
         if "/" not in name:
             continue
 
@@ -115,12 +97,7 @@ def main(
         typer.secho("No throughput data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     fig, ax = plt.subplots(figsize=(14, 8))
 
@@ -149,14 +126,7 @@ def main(
     plt.tight_layout()
 
     output_file = output_dir / "benchmark_throughput.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    typer.secho(f"Throughput plot saved to {output_file}", fg=typer.colors.GREEN)
+    pu.save_figure(None, output_file, f"Throughput plot saved to {output_file}")
 
 
 if __name__ == "__main__":

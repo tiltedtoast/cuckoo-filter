@@ -15,17 +15,11 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plot_utils as pu
 import typer
 from matplotlib.patches import Patch
 
 app = typer.Typer(help="Plot multi-GPU scaling benchmark results")
-
-# Operation colors and styles
-OPERATION_COLORS = {
-    "Insert": "#2E86AB",
-    "Query": "#A23B72",
-    "Delete": "#F18F01",
-}
 
 
 def parse_benchmark_name(name: str) -> dict:
@@ -57,11 +51,7 @@ def parse_benchmark_name(name: str) -> dict:
 
 def load_and_parse_csv(csv_path: Path) -> pd.DataFrame:
     """Load and parse benchmark data from a CSV file."""
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV {csv_path}: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_path)
 
     # Filter to median results only
     df = df[df["name"].str.contains("_median", na=False)]
@@ -128,7 +118,7 @@ def plot_scaling_on_axis(
                 x_pos,
                 throughput,
                 bar_width,
-                color=OPERATION_COLORS[operation],
+                color=pu.OPERATION_COLORS.get(operation, "#999999"),
                 edgecolor="white",
                 linewidth=0.5,
                 hatch=hatch,
@@ -169,12 +159,18 @@ def plot_scaling_on_axis(
 
     # Build legend elements
     legend_elements = [
-        Patch(facecolor=OPERATION_COLORS["Query"], label="Query"),
+        Patch(facecolor=pu.OPERATION_COLORS["Query"], label="Query"),
         Patch(
-            facecolor=OPERATION_COLORS["Insert"], hatch="//", alpha=0.8, label="Insert"
+            facecolor=pu.OPERATION_COLORS["Insert"],
+            hatch="//",
+            alpha=0.8,
+            label="Insert",
         ),
         Patch(
-            facecolor=OPERATION_COLORS["Delete"], hatch="--", alpha=0.8, label="Delete"
+            facecolor=pu.OPERATION_COLORS["Delete"],
+            hatch="--",
+            alpha=0.8,
+            label="Delete",
         ),
     ]
 
@@ -207,11 +203,7 @@ def main(
 
     df = load_and_parse_csv(csv_file)
 
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     # Check which scaling modes are present
     scaling_modes = df["fixture"].dropna().unique().tolist()
@@ -256,15 +248,7 @@ def main(
         )
 
     output_path = output_dir / "multi_gpu_scaling.pdf"
-    plt.savefig(
-        output_path,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    plt.close(fig)
-    typer.secho(f"Saved plot to {output_path}", fg=typer.colors.GREEN)
+    pu.save_figure(fig, output_path, f"Saved plot to {output_path}")
 
 
 if __name__ == "__main__":

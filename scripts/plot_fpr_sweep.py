@@ -15,24 +15,12 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plot_utils as pu
 import typer
 from matplotlib.patches import Patch
 
 app = typer.Typer(help="Plot FPR sweep benchmark results")
 
-FILTER_TYPES = {
-    "GPUCF": "GPU Cuckoo",
-    "Bloom": "Blocked Bloom",
-    "TCF": "TCF",
-    "GQF": "GQF",
-}
-
-FILTER_COLORS = {
-    "GPU Cuckoo": "#2E86AB",
-    "Blocked Bloom": "#A23B72",
-    "TCF": "#C73E1D",
-    "GQF": "#F18F01",
-}
 
 FPR_TARGETS = [
     (0.10, r"$\leq 10\%$"),
@@ -58,9 +46,11 @@ def parse_benchmark_name(name: str) -> dict:
     elif "_Delete_Sweep" in name:
         result["operation"] = "delete"
 
-    for prefix, filter_name in FILTER_TYPES.items():
+    # Map benchmark name prefix to standardized filter name
+    # GPUCF_FPR_Sweep → "gpucf" → "GPU Cuckoo"
+    for prefix in ["GPUCF", "Bloom", "TCF", "GQF"]:
         if name.startswith(prefix):
-            result["filter"] = filter_name
+            result["filter"] = pu.get_filter_display_name(prefix.lower())
             break
 
     type_to_bits = {
@@ -89,11 +79,7 @@ def parse_benchmark_name(name: str) -> dict:
 
 def load_and_parse_csv(csv_path: Path) -> pd.DataFrame:
     """Load and parse benchmark data from a CSV file."""
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV {csv_path}: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_path)
 
     df = df[df["name"].str.contains("_median", na=False)]
 
@@ -122,7 +108,7 @@ def plot_fpr_comparison_on_axis(
     insert_df = df[df["operation"] == "insert"].copy()
 
     filter_names = [
-        f for f in FILTER_COLORS.keys() if f in neg_query_df["filter"].values
+        f for f in pu.FILTER_COLORS.keys() if f in neg_query_df["filter"].values
     ]
 
     # Create config key to match data across operations
@@ -227,7 +213,7 @@ def plot_fpr_comparison_on_axis(
                 x_base,
                 query_tp,
                 bar_width,
-                color=FILTER_COLORS[filter_name],
+                color=pu.FILTER_COLORS[filter_name],
                 edgecolor="white",
                 linewidth=0.5,
             )
@@ -239,7 +225,7 @@ def plot_fpr_comparison_on_axis(
                     x_base + bar_offset,
                     insert_tp,
                     bar_width,
-                    color=FILTER_COLORS[filter_name],
+                    color=pu.FILTER_COLORS[filter_name],
                     edgecolor="white",
                     linewidth=0.5,
                     hatch="//",
@@ -253,7 +239,7 @@ def plot_fpr_comparison_on_axis(
                     x_base + bar_offset,
                     delete_tp,
                     bar_width,
-                    color=FILTER_COLORS[filter_name],
+                    color=pu.FILTER_COLORS[filter_name],
                     edgecolor="white",
                     linewidth=0.5,
                     hatch="--",
@@ -283,7 +269,7 @@ def plot_fpr_comparison_on_axis(
 
     # Build legend elements
     legend_elements = [
-        Patch(facecolor=FILTER_COLORS[name], label=name) for name in filter_names
+        Patch(facecolor=pu.FILTER_COLORS[name], label=name) for name in filter_names
     ]
     legend_elements.append(Patch(facecolor="gray", label="Query"))
     if has_insert_data:
@@ -295,7 +281,7 @@ def plot_fpr_comparison_on_axis(
             Patch(facecolor="gray", hatch="--", alpha=0.7, label="Delete")
         )
 
-    return legend_elements, filter_names
+    return legend_elements, filter_names  # ty:ignore[invalid-return-type]
 
 
 @app.command()
@@ -358,11 +344,7 @@ def main(
         df = load_and_parse_csv(csv_file)
         data_list.append((df, exponent))
 
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     # Create figure with 2 vertically stacked subplots
     fig, axes = plt.subplots(2, 1, figsize=(16, 14))
@@ -400,15 +382,7 @@ def main(
         )
 
     output_path = output_dir / "fpr_sweep_throughput.pdf"
-    plt.savefig(
-        output_path,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    plt.close(fig)
-    typer.secho(f"Saved throughput comparison to {output_path}", fg=typer.colors.GREEN)
+    pu.save_figure(fig, output_path, f"Saved throughput comparison to {output_path}")
 
 
 if __name__ == "__main__":

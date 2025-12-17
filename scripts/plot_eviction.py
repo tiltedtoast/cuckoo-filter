@@ -7,7 +7,6 @@
 #   "typer",
 # ]
 # ///
-import math
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot eviction benchmark results")
@@ -50,11 +50,7 @@ def load_csv_data(csv_path: Path) -> tuple[dict, dict, dict, Optional[int]]:
 
     Returns a tuple of (eviction_data, total_evictions_data, throughput_data, capacity)
     """
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV {csv_path}: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_path)
 
     # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
@@ -91,14 +87,6 @@ def load_csv_data(csv_path: Path) -> tuple[dict, dict, dict, Optional[int]]:
             throughput_data[policy][load_factor] = items_per_second
 
     return eviction_data, total_evictions_data, throughput_data, capacity
-
-
-def format_capacity_title(base_title: str, capacity: Optional[int]) -> str:
-    """Format title with capacity as power of 2."""
-    if capacity is not None:
-        power = int(math.log2(capacity))
-        return f"{base_title} $\\left(n=2^{{{power}}}\\right)$"
-    return base_title
 
 
 @app.command()
@@ -170,12 +158,7 @@ def main(
             raise typer.Exit(1)
         data_list.append((throughput_data, capacity, label))
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     policy_styles = {
         "BFS": {"color": "#2E86AB", "marker": "o", "linestyle": "-"},
@@ -221,8 +204,7 @@ def main(
         ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
         ax.grid(True, which="both", ls="--", alpha=0.3)
 
-        # Build title
-        title = format_capacity_title("Insert Throughput", capacity)
+        title = pu.format_capacity_title("Insert Throughput", capacity)
         if label:
             title += f" ({label})"
         ax.set_title(title, fontsize=16, fontweight="bold")
@@ -241,15 +223,7 @@ def main(
         )
 
     output_file = output_dir / "eviction_throughput.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    typer.secho(f"Throughput plot saved to {output_file}", fg=typer.colors.GREEN)
-    plt.close()
+    pu.save_figure(fig, output_file, f"Throughput plot saved to {output_file}")
 
 
 if __name__ == "__main__":

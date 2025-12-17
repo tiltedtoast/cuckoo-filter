@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
-import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot Speed of Light (SOL) benchmark results")
@@ -46,34 +46,9 @@ def main(
     Creates plots showing Compute, Memory, L1, L2, and DRAM throughputs as
     percentage of peak sustained performance.
     """
-    try:
-        df = pd.read_csv(csv_file)
-    except Exception as e:
-        typer.secho(f"Error reading CSV: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_file)
 
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    filter_styles = {
-        "cuckoo": {"color": "#2E86AB", "marker": "o"},
-        "bloom": {"color": "#A23B72", "marker": "s"},
-        "tcf": {"color": "#C73E1D", "marker": "^"},
-        "gqf": {"color": "#F18F01", "marker": "D"},
-    }
-
-    filter_display_names = {
-        "cuckoo": "Cuckoo",
-        "bloom": "Blocked Bloom",
-        "tcf": "TCF",
-        "gqf": "GQF",
-    }
-
-    def get_filter_display_name(filter_type: str) -> str:
-        return filter_display_names.get(filter_type, filter_type.capitalize())
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     operation_markers = {
         "insert": "o",
@@ -118,13 +93,13 @@ def main(
                     label=metric_name,
                     linewidth=2.5,
                     markersize=8,
-                    **style,
+                    **style,  # ty:ignore[invalid-argument-type]
                 )
 
             ax.set_xlabel("Filter Capacity (elements)", fontsize=14, fontweight="bold")
             ax.set_ylabel("Throughput (% of Peak)", fontsize=14, fontweight="bold")
             ax.set_title(
-                f"SOL Throughput Analysis - {get_filter_display_name(filter_type)} / {operation.capitalize()}",
+                f"SOL Throughput Analysis - {pu.get_filter_display_name(filter_type)} / {operation.capitalize()}",
                 fontsize=16,
                 fontweight="bold",
                 pad=20,
@@ -161,15 +136,15 @@ def main(
                 if filter_subset.empty:
                     continue
 
-                style = filter_styles.get(filter_type, {})
+                style = pu.FILTER_STYLES.get(filter_type, {})
 
                 ax.plot(
                     filter_subset["capacity"].values,
                     filter_subset[metric_col].values,
-                    label=get_filter_display_name(filter_type),
+                    label=f"{pu.get_filter_display_name(filter_type)} ({metric_name.replace('_', ' ').title()})",
                     linewidth=2.5,
                     markersize=8,
-                    **style,
+                    **style,  # ty:ignore[invalid-argument-type]
                 )
 
             ax.set_xlabel("Filter Capacity (elements)", fontsize=14, fontweight="bold")
@@ -224,7 +199,7 @@ def main(
                     continue
 
                 marker = operation_markers.get(operation, "o")
-                style = filter_styles.get(filter_type, {})
+                style = pu.FILTER_STYLES.get(filter_type, {})
 
                 ax.plot(
                     subset["capacity"].values,
@@ -238,7 +213,7 @@ def main(
                 )
 
             ax.set_title(
-                get_filter_display_name(filter_type),
+                pu.get_filter_display_name(filter_type),
                 fontsize=14,
                 fontweight="bold",
             )

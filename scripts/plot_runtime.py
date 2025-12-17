@@ -7,28 +7,16 @@
 #   "typer",
 # ]
 # ///
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot runtime benchmark results")
-
-
-def normalize_benchmark_name(name: str) -> str:
-    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
-    parts = name.split("/")
-    if len(parts) >= 2 and "Fixture" in parts[0]:
-        # Convert "CFFixture/Insert/..." to "CF_Insert/..."
-        fixture_name = parts[0].replace("Fixture", "")
-        bench_name = parts[1]
-        parts[0] = f"{fixture_name}_{bench_name}"
-        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
-    return "/".join(parts)
 
 
 @app.command()
@@ -55,14 +43,7 @@ def main(
         plot_runtime.py results.csv
         plot_runtime.py results.csv -o custom/dir
     """
-    try:
-        if str(csv_file) == "-":
-            df = pd.read_csv(sys.stdin)
-        else:
-            df = pd.read_csv(csv_file)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_file)
 
     # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
@@ -70,7 +51,7 @@ def main(
     benchmark_data = defaultdict(dict)
 
     for _, row in df.iterrows():
-        name = normalize_benchmark_name(row["name"])
+        name = pu.normalize_benchmark_name(row["name"])
         if "/" not in name:
             continue
 
@@ -105,8 +86,10 @@ def main(
 
     benchmark_names = sorted(benchmark_data.keys(), key=get_last_value, reverse=True)
 
-    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-    fig.suptitle("Runtime Comparison", fontsize=16, fontweight="bold")
+    fig, ax = pu.setup_figure(
+        figsize=(12, 8),
+        title="Runtime Comparison",
+    )
 
     for bench_name in benchmark_names:
         sizes = sorted(benchmark_data[bench_name].keys())
@@ -114,31 +97,25 @@ def main(
 
         ax.plot(sizes, times, "o-", label=bench_name, linewidth=2.5, markersize=8)
 
-    ax.set_xlabel("Input Size", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Runtime (ms)", fontsize=14, fontweight="bold")
-    ax.set_xscale("log", base=2)
-    ax.set_yscale("log")
-    ax.legend(fontsize=10, loc="best", framealpha=0)
-    ax.grid(True, which="both", ls="--", alpha=0.3)
+    pu.format_axis(
+        ax,
+        xlabel="Input Size",
+        ylabel="Runtime (ms)",
+        xscale="log",
+        yscale="log",
+    )
 
     plt.tight_layout()
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
+    pu.format_axis(
+        ax, xlabel="Input Size", ylabel="Runtime (ms)", xscale="log", yscale="log"
+    )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Determine output directory
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     output_file = output_dir / "benchmark_runtime.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    typer.secho(f"Plot saved to {output_file}", fg=typer.colors.GREEN)
+    pu.save_figure(None, output_file, f"Plot saved to {output_file}")
 
 
 if __name__ == "__main__":

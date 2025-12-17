@@ -15,6 +15,7 @@ from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot load factor benchmark results")
@@ -37,26 +38,6 @@ def extract_load_factor(name: str) -> Optional[float]:
         # Replace underscore with decimal point (e.g., "99_5" -> "99.5")
         value_str = match.group(1).replace("_", ".")
         return float(value_str) / 100.0
-    return None
-
-
-def extract_filter_type(name: str) -> Optional[str]:
-    """Extract filter type from benchmark name"""
-    # Format: CF_5/Insert or BBF_95/Query
-    if name.startswith("CPUCF_"):
-        return "CPU Cuckoo"
-    elif name.startswith("CF_"):
-        return "Cuckoo Filter"
-    elif name.startswith("BBF_"):
-        return "Blocked Bloom"
-    elif name.startswith("QF_"):
-        return "Quotient Filter"
-    elif name.startswith("TCF_"):
-        return "TCF"
-    elif name.startswith("GQF_"):
-        return "GQF"
-    elif name.startswith("PCF_"):
-        return "Partitioned Cuckoo"
     return None
 
 
@@ -87,11 +68,7 @@ def load_csv_data(csv_path: Path) -> dict:
 
     Returns a tuple of (benchmark_data, num_elements_per_operation)
     """
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV {csv_path}: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_path)
 
     # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
@@ -104,21 +81,31 @@ def load_csv_data(csv_path: Path) -> dict:
     for _, row in df.iterrows():
         name = row["name"]
 
-        filter_type = extract_filter_type(name)
+        # Extract filter type using standardized approach
+        filter_key = pu.normalize_benchmark_name(name)
+        filter_type = pu.get_filter_display_name(filter_key)
+
+        if not filter_type:
+            continue
+
         load_factor = extract_load_factor(name)
-        operation = extract_operation_type(name)
+        operation_type = extract_operation_type(name)
         lookup_type = extract_lookup_type(name)
         num_elements = extract_num_elements(name)
 
-        if filter_type is None or load_factor is None or operation is None:
+        if filter_type is None or load_factor is None or operation_type is None:
             continue
 
         # Store the number of elements for this operation (assumes all rows have same count)
-        if operation and num_elements and operation not in num_elements_per_operation:
-            num_elements_per_operation[operation] = num_elements
+        if (
+            operation_type
+            and num_elements
+            and operation_type not in num_elements_per_operation
+        ):
+            num_elements_per_operation[operation_type] = num_elements
 
         # For Query operations, append lookup type to filter name
-        if operation == "Query" and lookup_type:
+        if operation_type == "Query" and lookup_type:
             filter_key = f"{filter_type} ({lookup_type})"
         else:
             filter_key = filter_type
@@ -126,25 +113,40 @@ def load_csv_data(csv_path: Path) -> dict:
         items_per_second = row.get("items_per_second")
         if pd.notna(items_per_second):
             throughput_mops = items_per_second / 1_000_000
-            benchmark_data[operation][filter_key][load_factor] = throughput_mops
+            benchmark_data[operation_type][filter_key][load_factor] = throughput_mops
 
-    return benchmark_data, num_elements_per_operation
+    return benchmark_data, num_elements_per_operation  # ty:ignore[invalid-return-type]
 
 
 def get_filter_styles() -> dict:
-    """Define colors and markers for each filter type."""
+    """Define colors and markers for each filter type, with positive/negative variants."""
+    # Use the standardized filter styles from plot_utils as base
     base_styles = {
-        "Cuckoo Filter": {"color": "#2E86AB", "marker": "o"},
-        "CPU Cuckoo": {"color": "#00B4D8", "marker": "o"},
-        "Blocked Bloom": {"color": "#A23B72", "marker": "s"},
-        "TCF": {"color": "#C73E1D", "marker": "v"},
-        "GQF": {"color": "#F18F01", "marker": "^"},
-        "Partitioned Cuckoo": {"color": "#6A994E", "marker": "D"},
+        "GPU Cuckoo": pu.FILTER_STYLES.get(
+            "gpucuckoo", {"color": "#2E86AB", "marker": "o"}
+        ),
+        "CPU Cuckoo": pu.FILTER_STYLES.get(
+            "cpucuckoo", {"color": "#00B4D8", "marker": "o"}
+        ),
+        "Blocked Bloom": pu.FILTER_STYLES.get(
+            "blockedbloom", {"color": "#A23B72", "marker": "s"}
+        ),
+        "TCF": pu.FILTER_STYLES.get("tcf", {"color": "#C73E1D", "marker": "v"}),
+        "GQF": pu.FILTER_STYLES.get("gqf", {"color": "#F18F01", "marker": "^"}),
+        "Partitioned Cuckoo": pu.FILTER_STYLES.get(
+            "partitionedcuckoo", {"color": "#6A994E", "marker": "D"}
+        ),
     }
 
     # Generate styles for both positive and negative variants
     filter_styles = {}
     for filter_name, base_style in base_styles.items():
+        # Base style (for non-query operations)
+        filter_styles[filter_name] = {
+            "color": base_style["color"],
+            "marker": base_style["marker"],
+            "linestyle": "-",
+        }
         # Positive lookups: solid line
         filter_styles[f"{filter_name} (Positive)"] = {
             "color": base_style["color"],
@@ -157,19 +159,13 @@ def get_filter_styles() -> dict:
             "marker": base_style["marker"],
             "linestyle": "--",
         }
-        # Base filter (for non-query operations)
-        filter_styles[filter_name] = {
-            "color": base_style["color"],
-            "marker": base_style["marker"],
-            "linestyle": "-",
-        }
 
     return filter_styles
 
 
 def plot_operation_on_axis(
     ax: plt.Axes,
-    operation: str,
+    operation_type: str,
     benchmark_data: dict,
     num_elements_per_operation: dict,
     filter_styles: dict,
@@ -184,10 +180,10 @@ def plot_operation_on_axis(
     handles = []
     labels = []
 
-    for filter_type in sorted(benchmark_data[operation].keys()):
-        load_factors = sorted(benchmark_data[operation][filter_type].keys())
+    for filter_type in sorted(benchmark_data[operation_type].keys()):
+        load_factors = sorted(benchmark_data[operation_type][filter_type].keys())
         throughputs = [
-            benchmark_data[operation][filter_type][lf] for lf in load_factors
+            benchmark_data[operation_type][filter_type][lf] for lf in load_factors
         ]
 
         style = filter_styles.get(filter_type, {"marker": "o", "linestyle": "-"})
@@ -211,9 +207,9 @@ def plot_operation_on_axis(
     ax.grid(True, which="both", ls="--", alpha=0.3)
 
     # Build title with element count and optional suffix
-    title = f"{operation} Performance"
-    if operation in num_elements_per_operation:
-        n = num_elements_per_operation[operation]
+    title = f"{operation_type} Performance"
+    if operation_type in num_elements_per_operation:
+        n = num_elements_per_operation[operation_type]
         # Calculate power of 2
         power = int(math.log2(n))
         title += f" $\\left(n=2^{{{power}}}\\right)$"
@@ -310,17 +306,12 @@ def main(
         benchmark_data_list.append(data)
         num_elements_list.append(num_elements)
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     filter_styles = get_filter_styles()
 
     # Get all operations from all datasets
-    all_operations = set()
+    all_operations = set[str]()
     for data in benchmark_data_list:
         all_operations.update(data.keys())
 
@@ -385,18 +376,12 @@ def main(
         output_file = (
             output_dir / f"load_factor_{operation.lower().replace(' ', '_')}.pdf"
         )
-        plt.savefig(
+        pu.save_figure(
+            fig,
             output_file,
-            bbox_inches="tight",
-            transparent=True,
-            format="pdf",
-            dpi=600,
-        )
-        typer.secho(
             f"{operation} throughput comparison plot saved to {output_file}",
-            fg=typer.colors.GREEN,
+            close=True,
         )
-        plt.close()
 
 
 if __name__ == "__main__":

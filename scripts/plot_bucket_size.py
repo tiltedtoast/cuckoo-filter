@@ -15,28 +15,18 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plot_utils as pu
 import seaborn as sns
 import typer
 
 app = typer.Typer(help="Plot bucket size benchmark results")
 
 
-def normalize_benchmark_name(name: str) -> str:
-    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
-    parts = name.split("/")
-    if len(parts) >= 2 and "Fixture" in parts[0]:
-        # Convert "BucketSizeFixture/Insert<4>/..." to "BucketSize_Insert<4>/..."
-        fixture_name = parts[0].replace("Fixture", "")
-        bench_name = parts[1]
-        parts[0] = f"{fixture_name}_{bench_name}"
-        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
-    return "/".join(parts)
-
-
 def parse_benchmark_name(name: str) -> pd.Series:
-    # Pattern: BS<BucketSize>_<Operation>/<InputSize>/min_time:<MinTime>/repeats:<Repetitions>_<stat>
-    # Extract the operation and input size
-    match = re.match(r"BS\d+_(\w+)/(\d+)", name)
+    # Pattern: BSFixture<BucketSize>/<Operation>/<InputSize>/min_time:<MinTime>/repeats:<Repetitions>_<stat>
+    # Example: BSFixture4/Insert/65536/min_time:0.500/repeats:5_median
+    # Note: bucket_size is already in the CSV, so we don't need to extract it
+    match = re.match(r"BSFixture\d+/(\w+)/(\d+)", name)
     if match:
         operation = match.group(1)
         input_size = int(match.group(2))
@@ -47,31 +37,39 @@ def parse_benchmark_name(name: str) -> pd.Series:
                 "exponent": int(np.log2(input_size)),
             }
         )
-    return pd.Series({"operation": None, "input_size": None, "exponent": None})
+    return pd.Series(
+        {
+            "operation": None,
+            "input_size": None,
+            "exponent": None,
+        }
+    )
 
 
 def create_performance_heatmap(df: pd.DataFrame, operation: str, ax):
     subset = df[df["operation"] == operation].copy()
 
-    subset["normalized_time"] = subset.groupby("exponent")["time_ms"].transform(
-        lambda x: x / x.min()
-    )
-
+    # First create the pivot table with raw time_ms values
     pivot_table = subset.pivot(
         index="exponent",
         columns="bucket_size",
-        values="normalized_time",
+        values="time_ms",
     )
 
+    # Normalize each row by dividing by minimum value in that row
+    normalized_table = pivot_table.div(pivot_table.min(axis=1), axis=0)
+
     sns.heatmap(
-        pivot_table,
+        normalized_table,
         ax=ax,
         annot=True,
         fmt=".2f",
         cmap="rocket_r",
         cbar_kws={"label": "Performance Ratio (1.0 = Optimal)"},
         vmin=1.0,
-        vmax=pivot_table.max().max() if pivot_table.max().max() > 1.0 else 2.0,
+        vmax=normalized_table.max().max()
+        if normalized_table.max().max() > 1.0
+        else 2.0,
     )
 
     ax.set_title(
@@ -79,7 +77,9 @@ def create_performance_heatmap(df: pd.DataFrame, operation: str, ax):
     )
     ax.set_xlabel("Bucket Size", fontsize=12)
     ax.set_ylabel("Input Size", fontsize=12)
-    ax.set_yticklabels([f"$2^{{{int(exp)}}}$" for exp in pivot_table.index], rotation=0)
+    ax.set_yticklabels(
+        [f"$2^{{{int(exp)}}}$" for exp in normalized_table.index], rotation=0
+    )
 
 
 @app.command()
@@ -107,26 +107,15 @@ def main(
         plot_bucket_size.py results.csv
         plot_bucket_size.py results.csv -o custom/dir
     """
-    try:
-        if str(csv_file) == "-":
-            import sys
+    df = pu.load_csv(csv_file)
 
-            df = pd.read_csv(sys.stdin)
-        else:
-            df = pd.read_csv(csv_file)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-
-    # Filter for median records only and normalize names
+    # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
-    df["name"] = df["name"].apply(normalize_benchmark_name)
 
     parsed = df["name"].apply(parse_benchmark_name)
     df = pd.concat([df, parsed], axis=1)
 
-    # bucket_size comes as float from json
-    df["bucket_size"] = df["bucket_size"].astype(int)
+    # bucket_size is now extracted from the benchmark name (BSFixture<N>)
 
     df_filtered = df[df["operation"].isin(["Insert", "Query"])].copy()
 
@@ -139,28 +128,15 @@ def main(
     create_performance_heatmap(df_filtered, "Query", ax2)
 
     # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
     output_file = output_dir / "benchmark_bucket_size.pdf"
 
-    plt.tight_layout()
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        edgecolor="none",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-
-    typer.secho(
-        f"Bucket size performance plot saved to {output_file}", fg=typer.colors.GREEN
+    pu.save_figure(
+        None, output_file, f"Bucket size performance plot saved to {output_file}"
     )
 
 
 if __name__ == "__main__":
+    app()
     app()

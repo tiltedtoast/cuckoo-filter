@@ -7,28 +7,16 @@
 #   "typer",
 # ]
 # ///
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plot_utils as pu
 import typer
 
 app = typer.Typer(help="Plot memory usage benchmark results")
-
-
-def normalize_benchmark_name(name: str) -> str:
-    """Convert FixtureName/BenchmarkName/... to FixtureName_BenchmarkName/..."""
-    parts = name.split("/")
-    if len(parts) >= 2 and "Fixture" in parts[0]:
-        # Convert "CFFixture/Insert/..." to "CF_Insert/..."
-        fixture_name = parts[0].replace("Fixture", "")
-        bench_name = parts[1]
-        parts[0] = f"{fixture_name}_{bench_name}"
-        parts.pop(1)  # Remove the benchmark name since it's now in parts[0]
-    return "/".join(parts)
 
 
 @app.command()
@@ -55,14 +43,7 @@ def main(
         plot_memory.py results.csv
         plot_memory.py results.csv -o custom/dir
     """
-    try:
-        if str(csv_file) == "-":
-            df = pd.read_csv(sys.stdin)
-        else:
-            df = pd.read_csv(csv_file)
-    except Exception as e:
-        typer.secho(f"Error parsing CSV: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+    df = pu.load_csv(csv_file)
 
     # Filter for median records only
     df = df[df["name"].str.endswith("_median")]
@@ -71,7 +52,7 @@ def main(
     bits_per_item_data = defaultdict(dict)
 
     for _, row in df.iterrows():
-        name = normalize_benchmark_name(row["name"])
+        name = pu.normalize_benchmark_name(row["name"])
         if "/" not in name:
             continue
 
@@ -109,13 +90,6 @@ def main(
         typer.secho("No memory data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    # Determine output directory
-    if output_dir is None:
-        script_dir = Path(__file__).parent
-        output_dir = script_dir.parent / "build"
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
 
     if memory_data:
@@ -135,13 +109,14 @@ def main(
 
             ax1.plot(sizes, memory, "o-", label=bench_name, linewidth=2.5, markersize=8)
 
-        ax1.set_xlabel("Input Size", fontsize=14, fontweight="bold")
-        ax1.set_ylabel("Memory Usage (MiB)", fontsize=14, fontweight="bold")
-        ax1.set_xscale("log", base=2)
-        ax1.set_yscale("log")
-        ax1.legend(fontsize=10, loc="best", framealpha=0)
-        ax1.grid(True, which="both", ls="--", alpha=0.3)
-        ax1.set_title("Total Memory Usage", fontsize=16, fontweight="bold")
+        pu.format_axis(
+            ax1,
+            xlabel="Input Size",
+            ylabel="Memory Usage (MiB)",
+            title="Total Memory Usage",
+            xscale="log",
+            yscale="log",
+        )
 
     if bits_per_item_data:
 
@@ -160,26 +135,17 @@ def main(
 
             ax2.plot(sizes, bpi, "o-", label=bench_name, linewidth=2.5, markersize=8)
 
-        ax2.set_xlabel("Input Size", fontsize=14, fontweight="bold")
-        ax2.set_ylabel("Bits Per Item", fontsize=14, fontweight="bold")
-        ax2.set_xscale("log", base=2)
-        ax2.legend(fontsize=10, loc="best", framealpha=0)
-        ax2.grid(True, which="both", ls="--", alpha=0.3)
-        ax2.set_title(
-            "Memory Efficiency (Bits Per Item)", fontsize=16, fontweight="bold"
+        pu.format_axis(
+            ax2,
+            xlabel="Input Size",
+            ylabel="Bits Per Item",
+            title="Memory Efficiency (Bits Per Item)",
+            xscale="log",
         )
 
-    plt.tight_layout()
-
+    output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
     output_file = output_dir / "benchmark_memory.pdf"
-    plt.savefig(
-        output_file,
-        bbox_inches="tight",
-        transparent=True,
-        format="pdf",
-        dpi=600,
-    )
-    typer.secho(f"Memory plot saved to {output_file}", fg=typer.colors.GREEN)
+    pu.save_figure(None, output_file, f"Memory plot saved to {output_file}")
 
 
 if __name__ == "__main__":
