@@ -15,12 +15,12 @@
         system = system;
         config.allowUnfree = true;
       };
-      cudaPkgs = pkgs.cudaPackages;
+      cudaPkgs = pkgs.cudaPackages_13_0;
       llvm = pkgs.llvmPackages_21;
 
       cuda = {
-        arch = "800";
-        sm_target = "sm_80";
+        arch = "1200";
+        sm_target = "sm_120";
         path = cudaPkgs.cudatoolkit;
         version = {
           complete = cudaPkgs.cudaMajorMinorVersion;

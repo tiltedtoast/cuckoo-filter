@@ -15,6 +15,7 @@ cuda_args = [
     '--expt-relaxed-constexpr',
     '--generate-line-info',
     '-gencode=arch=compute_120,code=sm_120',
+    '-gencode=arch=compute_90,code=sm_90',
     '-gencode=arch=compute_80,code=sm_80',
     '-gencode=arch=compute_75,code=compute_75',
 ]
@@ -256,6 +257,25 @@ if get_option('BUILD_BENCHMARKS') == true
         dependencies: bench_deps,
         include_directories: includes,
         cuda_args: cuda_args,
+        install: false,
+    )
+
+    # 128-bit vs 256-bit load width comparison benchmarks
+    executable(
+        'benchmark-load-width-256bit',
+        './benchmark/load_width_benchmark.cu',
+        dependencies: bench_deps,
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
+
+    executable(
+        'benchmark-load-width-128bit',
+        './benchmark/load_width_benchmark.cu',
+        dependencies: bench_deps,
+        include_directories: includes,
+        cuda_args: cuda_args + ['-DCUCKOO_FILTER_DISABLE_256BIT_LOADS'],
         install: false,
     )
 

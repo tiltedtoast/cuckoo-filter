@@ -70,110 +70,125 @@ size_t countOnes(T* data, size_t n) {
  *
  * The high bit of each slot that is zero will be set in the result.
  *
- * @tparam T The type of the individual items (uint8_t, uint16_t, or uint32_t)
- * @param v The packed 64-bit integer
+ * @tparam TagType The type of the individual items (uint8_t, uint16_t, or uint32_t)
+ * @tparam WordType The packed word type (uint32_t or uint64_t)
+ * @param v The packed integer
  * @return A bitmask with the high bit of each zero slot set
  */
-template <typename T>
-__host__ __device__ __forceinline__ constexpr uint64_t getZeroMask(uint64_t v) {
-    if constexpr (sizeof(T) == 1) {
-        return (v - 0x0101010101010101ULL) & ~v & 0x8080808080808080ULL;
-    } else if constexpr (sizeof(T) == 2) {
-        return (v - 0x0001000100010001ULL) & ~v & 0x8000800080008000ULL;
-    } else if constexpr (sizeof(T) == 4) {
-        return (v - 0x0000000100000001ULL) & ~v & 0x8000000080000000ULL;
+template <typename TagType, typename WordType>
+__host__ __device__ __forceinline__ constexpr WordType getZeroMask(WordType v) {
+    static_assert(sizeof(WordType) == 4 || sizeof(WordType) == 8, "WordType must be 32 or 64 bits");
+
+    if constexpr (sizeof(WordType) == 8) {
+        if constexpr (sizeof(TagType) == 1) {
+            return (v - 0x0101010101010101ULL) & ~v & 0x8080808080808080ULL;
+        } else if constexpr (sizeof(TagType) == 2) {
+            return (v - 0x0001000100010001ULL) & ~v & 0x8000800080008000ULL;
+        } else if constexpr (sizeof(TagType) == 4) {
+            return (v - 0x0000000100000001ULL) & ~v & 0x8000000080000000ULL;
+        } else {
+            return 0;
+        }
     } else {
-        return 0;
+        if constexpr (sizeof(TagType) == 1) {
+            return (v - 0x01010101U) & ~v & 0x80808080U;
+        } else if constexpr (sizeof(TagType) == 2) {
+            return (v - 0x00010001U) & ~v & 0x80008000U;
+        } else if constexpr (sizeof(TagType) == 4) {
+            return (v - 0x00000001U) & ~v & 0x80000000U;
+        } else {
+            return 0;
+        }
     }
 }
 
 /**
- * @brief Checks if a packed word contains a zero byte/word.
+ * @brief Checks if a packed word contains a zero slot.
  *
- * @tparam T The type of the individual items (uint8_t, uint16_t, or uint32_t)
- * @param v The packed 64-bit integer
+ * @tparam TagType The type of the individual items (uint8_t, uint16_t, or uint32_t)
+ * @tparam WordType The packed word type (uint32_t or uint64_t)
+ * @param v The packed integer
  * @return true if any of the items in v are zero
  */
-template <typename T>
-__host__ __device__ __forceinline__ constexpr bool hasZero(uint64_t v) {
-    return getZeroMask<T>(v) != 0;
+template <typename TagType, typename WordType>
+__host__ __device__ __forceinline__ constexpr bool hasZero(WordType v) {
+    return getZeroMask<TagType, WordType>(v) != 0;
 }
 
 /**
- * @brief Replicates a tag value across all slots in a 64-bit word.
+ * @brief Replicates a tag value across all slots in a word.
  *
- * @tparam T The type of the tag (uint8_t, uint16_t, or uint32_t)
+ * @tparam TagType The type of the tag (uint8_t, uint16_t, or uint32_t)
+ * @tparam WordType The target word type (uint32_t or uint64_t)
  * @param tag The tag value to replicate
- * @return A 64-bit word with the tag replicated in every slot
+ * @return A word with the tag replicated in every slot
  */
-template <typename T>
-__host__ __device__ __forceinline__ constexpr uint64_t replicateTag(T tag) {
-    if constexpr (sizeof(T) == 1) {
-        return static_cast<uint64_t>(tag) * 0x0101010101010101ULL;
-    } else if constexpr (sizeof(T) == 2) {
-        return static_cast<uint64_t>(tag) * 0x0001000100010001ULL;
-    } else if constexpr (sizeof(T) == 4) {
-        return static_cast<uint64_t>(tag) * 0x0000000100000001ULL;
+template <typename TagType, typename WordType>
+__host__ __device__ __forceinline__ constexpr WordType replicateTag(TagType tag) {
+    static_assert(sizeof(WordType) == 4 || sizeof(WordType) == 8, "WordType must be 32 or 64 bits");
+
+    if constexpr (sizeof(WordType) == 8) {
+        if constexpr (sizeof(TagType) == 1) {
+            return static_cast<uint64_t>(tag) * 0x0101010101010101ULL;
+        } else if constexpr (sizeof(TagType) == 2) {
+            return static_cast<uint64_t>(tag) * 0x0001000100010001ULL;
+        } else if constexpr (sizeof(TagType) == 4) {
+            return static_cast<uint64_t>(tag) * 0x0000000100000001ULL;
+        } else {
+            return tag;
+        }
     } else {
-        return tag;
+        if constexpr (sizeof(TagType) == 1) {
+            return static_cast<uint32_t>(tag) * 0x01010101U;
+        } else if constexpr (sizeof(TagType) == 2) {
+            return static_cast<uint32_t>(tag) * 0x00010001U;
+        } else if constexpr (sizeof(TagType) == 4) {
+            return static_cast<uint32_t>(tag);
+        } else {
+            return tag;
+        }
     }
 }
 
+#if __CUDA_ARCH__ >= 1000
 
 /**
- * @brief Returns a bitmask indicating which slots in a 32-bit packed word are zero.
+ * @brief Loads 256 bits from global memory using the non-coherent cache path.
  *
- * Uses SWAR (SIMD Within A Register) to check multiple items in parallel.
- * The high bit of each slot that is zero will be set in the result.
+ * This function uses inline PTX for 256-bit vectorized loads.
+ * For uint64_t: loads 4 values (v4.u64)
+ * For uint32_t: loads 8 values (v8.u32)
  *
- * @tparam T The type of the individual items (uint8_t, uint16_t, or uint32_t)
- * @param v The packed 32-bit integer
- * @return A bitmask with the high bit of each zero slot set
+ * @note Only available on sm_100+ architectures with PTX 8.8.
+ *       Use __CUDA_ARCH__ >= 1000 guard at call sites.
+ *
+ * @tparam T Element type (uint32_t or uint64_t)
+ * @param ptr Source pointer (must be 32-byte aligned)
+ * @param out Output array (4 elements for uint64_t, 8 for uint32_t)
  */
 template <typename T>
-__host__ __device__ __forceinline__ constexpr uint32_t getZeroMask32(uint32_t v) {
-    if constexpr (sizeof(T) == 1) {
-        return (v - 0x01010101U) & ~v & 0x80808080U;
-    } else if constexpr (sizeof(T) == 2) {
-        return (v - 0x00010001U) & ~v & 0x80008000U;
-    } else if constexpr (sizeof(T) == 4) {
-        return (v - 0x00000001U) & ~v & 0x80000000U;
+__device__ __forceinline__ void load256BitGlobalNC(const T* ptr, T* out) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "T must be uint32_t or uint64_t");
+
+    if constexpr (sizeof(T) == 8) {
+        asm volatile("ld.global.nc.v4.u64 {%0, %1, %2, %3}, [%4];"
+                     : "=l"(out[0]), "=l"(out[1]), "=l"(out[2]), "=l"(out[3])
+                     : "l"(ptr));
     } else {
-        return 0;
+        asm volatile("ld.global.nc.v8.u32 {%0, %1, %2, %3, %4, %5, %6, %7}, [%8];"
+                     : "=r"(out[0]),
+                       "=r"(out[1]),
+                       "=r"(out[2]),
+                       "=r"(out[3]),
+                       "=r"(out[4]),
+                       "=r"(out[5]),
+                       "=r"(out[6]),
+                       "=r"(out[7])
+                     : "l"(ptr));
     }
 }
 
-/**
- * @brief Checks if a 32-bit packed word contains a zero byte/word.
- *
- * @tparam T The type of the individual items (uint8_t, uint16_t, or uint32_t)
- * @param v The packed 32-bit integer
- * @return true if any of the items in v are zero
- */
-template <typename T>
-__host__ __device__ __forceinline__ constexpr bool hasZero32(uint32_t v) {
-    return getZeroMask32<T>(v) != 0;
-}
-
-/**
- * @brief Replicates a tag value across all slots in a 32-bit word.
- *
- * @tparam T The type of the tag (uint8_t, uint16_t, or uint32_t)
- * @param tag The tag value to replicate
- * @return A 32-bit word with the tag replicated in every slot
- */
-template <typename T>
-__host__ __device__ __forceinline__ constexpr uint32_t replicateTag32(T tag) {
-    if constexpr (sizeof(T) == 1) {
-        return static_cast<uint32_t>(tag) * 0x01010101U;
-    } else if constexpr (sizeof(T) == 2) {
-        return static_cast<uint32_t>(tag) * 0x00010001U;
-    } else if constexpr (sizeof(T) == 4) {
-        return static_cast<uint32_t>(tag);
-    } else {
-        return tag;
-    }
-}
+#endif
 
 /**
  * @brief Integer division with rounding up (ceiling).
