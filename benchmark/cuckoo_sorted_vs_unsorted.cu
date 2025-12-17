@@ -13,8 +13,6 @@ using Config = CuckooConfig<uint64_t, 16, 500, 256, 16, XorAltBucketPolicy>;
 using Filter = CuckooFilter<Config>;
 using PackedTagType = typename Filter::PackedTagType;
 
-static constexpr double LOAD_FACTOR = 0.95;
-
 using CF = CuckooFilterFixture<Config>;
 
 BENCHMARK_DEFINE_F(CF, InsertUnsorted)(bm::State& state) {
