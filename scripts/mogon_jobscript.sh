@@ -13,11 +13,8 @@
 
 set -e
 
-module purge
-module load tools/Meson/1.4.0-GCCcore-13.3.0
-module use /apps/easybuild/2025/cuda/modules/all
-module load tools/Ninja
-module load system/CUDA
+# shellcheck disable=SC1091
+source ./scripts/mogon_env.sh
 
 srun meson compile -C build
 
