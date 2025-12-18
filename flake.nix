@@ -15,7 +15,9 @@
         system = system;
         config.allowUnfree = true;
       };
-      cudaPkgs = pkgs.cudaPackages_13_0;
+
+      # https://github.com/clangd/clangd/issues/2531
+      cudaPkgs = pkgs.cudaPackages_12_9;
       llvm = pkgs.llvmPackages_21;
 
       cuda = {
@@ -33,8 +35,6 @@
         cudatoolkit
         cuda_cudart
         pkgs.stdenv.cc.cc.lib
-        pkgs.openssl.dev
-        pkgs.openssl.out
       ];
 
       nativeBuildInputs = with pkgs; [
