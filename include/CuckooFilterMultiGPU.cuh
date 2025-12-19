@@ -347,22 +347,28 @@ class CuckooFilterMultiGPU {
      * @brief Constructs a new CuckooFilterMultiGPU with custom transfer plan.
      *
      * Initializes gossip context, multisplit, all-to-all primitives with provided
-     * transfer plan, and CuckooFilter instances on each available GPU.
+     * transfer plan loaded from file, and CuckooFilter instances on each available GPU.
      *
      * @param numGPUs Number of GPUs to use.
      * @param capacity Total capacity of the distributed filter.
-     * @param transferPlan Custom gossip transfer plan for optimized topology-aware transfers.
+     * @param transferPlanPath Path to gossip transfer plan file for optimized topology-aware
+     * transfers.
      */
-    CuckooFilterMultiGPU(
-        size_t numGPUs,
-        size_t capacity,
-        const gossip::transfer_plan_t& transferPlan
-    )
+    CuckooFilterMultiGPU(size_t numGPUs, size_t capacity, const char* transferPlanPath)
         : numGPUs(numGPUs),
           capacityPerGPU(static_cast<size_t>(SDIV(capacity, numGPUs) * 1.02)),
           gossipContext(numGPUs),
           multisplit(gossipContext),
-          all2all(gossipContext, transferPlan),
+          all2all(
+              gossipContext,
+              [&]() {
+                  auto plan = parse_plan(transferPlanPath);
+                  if (plan.num_gpus() == 0) {
+                      return gossip::all2all::default_plan(numGPUs);
+                  }
+                  return plan;
+              }()
+          ),
           srcBuffers(numGPUs, nullptr),
           dstBuffers(numGPUs, nullptr),
           bufferCapacities(numGPUs, 0) {

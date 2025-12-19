@@ -12,7 +12,7 @@ namespace bm = benchmark;
 
 using Config = CuckooConfig<uint64_t, 16, 500, 256, 16>;
 
-static constexpr size_t CAPACITY_PER_GPU = 1ULL << 30;
+static constexpr size_t CAPACITY_PER_GPU = 1ULL << 31;
 static constexpr double LOAD_FACTOR = 0.95;
 
 template <typename ConfigType>
