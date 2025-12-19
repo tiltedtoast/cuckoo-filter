@@ -335,7 +335,10 @@ class CuckooFilterMultiGPU {
 
         for (size_t i = 0; i < numGPUs; ++i) {
             CUDA_CALL(cudaSetDevice(gossipContext.get_device_id(i)));
-            filters[i] = new CuckooFilter<Config>(capacityPerGPU);
+            CuckooFilter<Config>* filter;
+            CUDA_CALL(cudaMallocManaged(&filter, sizeof(CuckooFilter<Config>)));
+            new (filter) CuckooFilter<Config>(capacityPerGPU);
+            filters[i] = filter;
         }
         gossipContext.sync_hard();
     }
@@ -369,7 +372,10 @@ class CuckooFilterMultiGPU {
 
         for (size_t i = 0; i < numGPUs; ++i) {
             CUDA_CALL(cudaSetDevice(gossipContext.get_device_id(i)));
-            filters[i] = new CuckooFilter<Config>(capacityPerGPU);
+            CuckooFilter<Config>* filter;
+            CUDA_CALL(cudaMallocManaged(&filter, sizeof(CuckooFilter<Config>)));
+            new (filter) CuckooFilter<Config>(capacityPerGPU);
+            filters[i] = filter;
         }
         gossipContext.sync_hard();
     }
@@ -383,7 +389,8 @@ class CuckooFilterMultiGPU {
         freeBuffers();
         for (size_t i = 0; i < numGPUs; ++i) {
             CUDA_CALL(cudaSetDevice(gossipContext.get_device_id(i)));
-            delete filters[i];
+            filters[i]->~CuckooFilter<Config>();
+            CUDA_CALL(cudaFree(filters[i]));
         }
     }
 
