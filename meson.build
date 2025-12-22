@@ -306,6 +306,15 @@ if get_option('BUILD_BENCHMARKS') == true
         cuda_args: cuda_args,
         install: false,
     )
+
+    executable(
+        'kmer_benchmark',
+        './benchmark/kmer_benchmark.cu',
+        dependencies: bench_deps + [gossip_dep],
+        include_directories: includes,
+        cuda_args: cuda_args,
+        install: false,
+    )
 endif
 
 if get_option('BUILD_TESTS') == true
