@@ -22,3 +22,4 @@ benchmark*.csv
 .venv
 docs
 __pycache__
+data
