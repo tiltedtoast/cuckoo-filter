@@ -213,7 +213,7 @@ class CuckooFilterMultiGPU {
         });
         gossipContext.sync_hard();
 
-        // Phase 1: Multisplit - partition keys by target GPU
+        // Partition keys by target GPU
         std::vector<std::vector<size_t>> partitionTable(numGPUs, std::vector<size_t>(numGPUs));
         std::vector<size_t> dstLens(numGPUs, perGPUCapacity);
 
@@ -238,7 +238,7 @@ class CuckooFilterMultiGPU {
             }
         }
 
-        // Phase 2: shuffle partitioned keys to correct GPUs
+        // Shuffle partitioned keys to correct GPUs
         all2all.execAsync(
             srcBuffers,     // partitioned source data
             dstLens,        // source buffer capacities
@@ -262,7 +262,7 @@ class CuckooFilterMultiGPU {
             return returnOccupied ? totalOccupiedSlots() : 0;
         }
 
-        // Phase 3: Prepare table for reverse all-to-all
+        // Prepare table for reverse all-to-all
         std::vector<std::vector<size_t>> reverseTable(numGPUs, std::vector<size_t>(numGPUs));
         for (size_t src = 0; src < numGPUs; ++src) {
             for (size_t dst = 0; dst < numGPUs; ++dst) {
@@ -270,7 +270,7 @@ class CuckooFilterMultiGPU {
             }
         }
 
-        // Phase 4: Execute filter operations
+        // Execute filter operations
         parallelForGPUs([&](size_t gpuId) {
             size_t localCount = recvCounts[gpuId];
             if (localCount == 0) {
@@ -288,7 +288,7 @@ class CuckooFilterMultiGPU {
         );
         all2allResults.sync();
 
-        // Phase 5: Copy results back to host and reorder
+        // Copy results back to host and reorder
         std::vector<size_t> returnCounts(numGPUs);
         for (size_t gpu = 0; gpu < numGPUs; ++gpu) {
             returnCounts[gpu] = 0;

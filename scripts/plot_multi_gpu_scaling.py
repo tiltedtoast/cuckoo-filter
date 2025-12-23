@@ -116,7 +116,7 @@ def plot_scaling_on_axis(
         return []
 
     gpu_counts = sorted(mode_df["gpus"].unique())
-    operations = ["Insert", "Query", "Delete"]
+    operations = ["Query", "Insert", "Delete"]
 
     n_gpu_counts = len(gpu_counts)
     n_operations = len(operations)
@@ -185,7 +185,7 @@ def plot_scaling_on_axis(
     ):
         if scaling_mode == "weak":
             cap = mode_df["capacity_per_gpu"].iloc[0]
-            cap_exp = int(np.log2(cap)) if cap > 0 else 0
+            cap_exp = round(np.log2(cap)) if cap > 0 else 0
             title = rf"Weak Scaling (${2}^{{{cap_exp}}}$ slots/GPU)"
         else:
             total_cap = (
@@ -193,7 +193,7 @@ def plot_scaling_on_axis(
                 if "total_capacity" in mode_df.columns
                 else 0
             )
-            total_exp = int(np.log2(total_cap)) if total_cap > 0 else 0
+            total_exp = round(np.log2(total_cap)) if total_cap > 0 else 0
             title = rf"Strong Scaling (${2}^{{{total_exp}}}$ total slots)"
     else:
         title = f"{scaling_mode.capitalize()} Scaling"
@@ -237,9 +237,9 @@ def main(
     """
     Generate multi-GPU scaling throughput plots from benchmark CSV.
 
-    Creates a figure with two vertically stacked plots:
-    - Top: Weak scaling (total capacity grows with GPU count)
-    - Bottom: Strong scaling (fixed total capacity)
+    Creates separate figures for each scaling mode:
+    - Weak scaling (total capacity grows with GPU count)
+    - Strong scaling (fixed total capacity)
     """
     if not csv_file.exists():
         typer.secho(f"Error: File not found: {csv_file}", fg=typer.colors.RED, err=True)
@@ -252,48 +252,33 @@ def main(
 
     # Check which scaling modes are present
     scaling_modes = df["fixture"].dropna().unique().tolist()
-    n_modes = len(scaling_modes)
 
-    if n_modes == 0:
+    if len(scaling_modes) == 0:
         typer.secho("No valid scaling data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    # Create figure with appropriate number of subplots
-    if n_modes == 1:
-        fig, ax = plt.subplots(figsize=(12, 8))
-        axes = [ax]
-    else:
-        fig, axes = plt.subplots(2, 1, figsize=(12, 14))
-
-    all_legend_elements = []
-    seen_labels = set()
-
-    # Plot each scaling mode
-    for idx, (ax, mode) in enumerate(zip(axes, ["weak", "strong"][:n_modes])):
+    # Create separate figure for each scaling mode
+    for mode in ["weak", "strong"]:
         if mode not in scaling_modes:
             continue
 
-        show_xlabel = idx == n_modes - 1
-        legend_elements = plot_scaling_on_axis(ax, df, mode, show_xlabel=show_xlabel)
+        fig, ax = plt.subplots(figsize=(12, 8))
 
-        for elem in legend_elements:
-            if elem.get_label() not in seen_labels:
-                all_legend_elements.append(elem)
-                seen_labels.add(elem.get_label())
+        legend_elements = plot_scaling_on_axis(ax, df, mode, show_xlabel=True)
 
-    plt.tight_layout()
+        if legend_elements:
+            fig.legend(
+                handles=legend_elements,
+                fontsize=10,
+                loc="center left",
+                bbox_to_anchor=(1.0, 0.5),
+                framealpha=0.9,
+            )
 
-    if all_legend_elements:
-        fig.legend(
-            handles=all_legend_elements,
-            fontsize=10,
-            loc="center left",
-            bbox_to_anchor=(1.0, 0.5),
-            framealpha=0.9,
-        )
+        plt.tight_layout()
 
-    output_path = output_dir / "multi_gpu_scaling.pdf"
-    pu.save_figure(fig, output_path, f"Saved plot to {output_path}")
+        output_path = output_dir / f"{mode}_scaling.pdf"
+        pu.save_figure(fig, output_path, f"Saved plot to {output_path}")
 
 
 if __name__ == "__main__":
