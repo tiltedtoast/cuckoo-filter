@@ -14,7 +14,7 @@ This library provides a GPU-accelerated Cuckoo Filter implementation optimized f
 -   Configurable fingerprint size and bucket size
 -   Multiple eviction policies (DFS, BFS)
 -   Sorted insertion mode for improved memory coalescing
--   Multi-GPU support via NCCL
+-   Multi-GPU support via [gossip](https://github.com/Funatiq/gossip)
 -   IPC support for cross-process filter sharing
 -   Header-only library design
 
@@ -23,7 +23,7 @@ This library provides a GPU-accelerated Cuckoo Filter implementation optimized f
 -   CUDA Toolkit
 -   C++20 compatible compiler
 -   Meson build system (>= 1.3.0)
--   NCCL (optional, for multi-GPU support)
+-   [gossip](https://github.com/Funatiq/gossip) (optional, for multi-GPU support)
 
 ## Building
 
