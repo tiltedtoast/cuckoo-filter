@@ -67,32 +67,58 @@ def main(
         typer.secho("No data found in CSV", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
+    # Calculate speedup of 256-bit over 128-bit (baseline)
+    if "128-bit" not in benchmark_data or "256-bit" not in benchmark_data:
+        typer.secho(
+            "Need both 128-bit and 256-bit data to compute speedup",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Find common sizes between both variants
+    common_sizes = sorted(
+        set(benchmark_data["128-bit"].keys()) & set(benchmark_data["256-bit"].keys())
+    )
+    if not common_sizes:
+        typer.secho(
+            "No common sizes found between variants", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(1)
+
+    # Calculate percentage improvement over 128-bit baseline
+    percent_improvement = [
+        (benchmark_data["256-bit"][s] / benchmark_data["128-bit"][s] - 1) * 100
+        for s in common_sizes
+    ]
+
     fig, ax = pu.setup_figure(
         figsize=(10, 6),
-        title="Query Throughput: 128-bit vs 256-bit Loads",
+        title="Query Speedup: 256-bit vs 128-bit Loads",
     )
 
-    colors = {"128-bit": "#E63946", "256-bit": "#2A9D8F"}
+    ax.plot(  # ty:ignore[possibly-missing-attribute]
+        common_sizes,
+        percent_improvement,
+        "o-",
+        label="256-bit speedup",
+        color="#2A9D8F",
+        linewidth=2.5,
+        markersize=8,
+    )
 
-    for variant in ["128-bit", "256-bit"]:
-        if variant not in benchmark_data:
-            continue
-        sizes = sorted(benchmark_data[variant].keys())
-        throughput = [benchmark_data[variant][s] for s in sizes]
-        ax.plot(  # ty:ignore[possibly-missing-attribute]
-            sizes,
-            throughput,
-            "o-",
-            label=f"{variant} loads",
-            color=colors[variant],
-            linewidth=2.5,
-            markersize=8,
-        )
+    # Add a reference line at 0% (no improvement)
+    ax.axhline(y=0, color="#888888", linestyle="--", linewidth=1.5, alpha=0.7)  # ty:ignore[possibly-missing-attribute]
+
+    # Format y-axis as percentages
+    from matplotlib.ticker import FuncFormatter
+
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0f}%"))  # ty:ignore[possibly-missing-attribute]
 
     pu.format_axis(
         ax,  # ty:ignore[invalid-argument-type]
         xlabel="Input Size",
-        ylabel="Throughput [M ops/s]",
+        ylabel="",
         xscale="log",
         yscale=None,
     )
