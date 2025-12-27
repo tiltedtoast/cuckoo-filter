@@ -95,10 +95,6 @@ def main(
         ...,
         help="Path to CSV file for top plot",
     ),
-    csv_file_middle: Path = typer.Argument(
-        ...,
-        help="Path to CSV file for middle plot",
-    ),
     csv_file_bottom: Path = typer.Argument(
         ...,
         help="Path to CSV file for bottom plot",
@@ -115,12 +111,6 @@ def main(
         "-lt",
         help="Label to append to top plot title",
     ),
-    label_middle: Optional[str] = typer.Option(
-        None,
-        "--label-middle",
-        "-lm",
-        help="Label to append to middle plot title",
-    ),
     label_bottom: Optional[str] = typer.Option(
         None,
         "--label-bottom",
@@ -129,18 +119,17 @@ def main(
     ),
 ):
     """
-    Generate eviction throughput plots from three benchmark CSV files.
+    Generate eviction throughput plots from two benchmark CSV files.
 
-    Creates a single figure with three vertically stacked throughput plots.
+    Creates a single figure with two vertically stacked throughput plots.
 
     Examples:
-        plot_eviction.py small.csv medium.csv large.csv
-        plot_eviction.py small.csv medium.csv large.csv -o custom/dir
+        plot_eviction.py small.csv large.csv
+        plot_eviction.py small.csv large.csv -o custom/dir
     """
-    # Load data from all three CSV files
+    # Load data from both CSV files
     csv_files = [
         (csv_file_top, "top", label_top),
-        (csv_file_middle, "middle", label_middle),
         (csv_file_bottom, "bottom", label_bottom),
     ]
 
@@ -165,8 +154,8 @@ def main(
         "DFS": {"color": "#A23B72", "marker": "s", "linestyle": "--"},
     }
 
-    # Create figure with 3 vertically stacked subplots
-    fig, axes = plt.subplots(3, 1, figsize=(12, 16), sharex=True)
+    # Create figure with 2 vertically stacked subplots
+    fig, axes = plt.subplots(2, 1, figsize=(12, 12), sharex=True)
 
     all_handles = []
     all_labels = []
@@ -198,7 +187,7 @@ def main(
                 all_labels.append(policy)
 
         # Only show x-label on bottom plot
-        if idx == 2:
+        if idx == 1:
             ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
 
         ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
