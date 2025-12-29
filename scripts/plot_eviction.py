@@ -166,8 +166,8 @@ def main(
         for policy in sorted(throughput_data.keys()):
             load_factors = sorted(throughput_data[policy].keys())
             throughputs = [
-                throughput_data[policy][lf] / 1e6 for lf in load_factors
-            ]  # Convert to millions
+                throughput_data[policy][lf] / 1e9 for lf in load_factors
+            ]  # Convert to billions
 
             style = policy_styles.get(policy, {"marker": "o", "linestyle": "-"})
             (line,) = ax.plot(
@@ -190,7 +190,7 @@ def main(
         if idx == 1:
             ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
 
-        ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
+        ax.set_ylabel("Throughput [B ops/s]", fontsize=14, fontweight="bold")
         ax.grid(True, which="both", ls="--", alpha=0.3)
 
         title = pu.format_capacity_title("Insert Throughput", capacity)

@@ -60,7 +60,7 @@ def load_and_parse_csv(csv_path: Path) -> pd.DataFrame:
     df["operation"] = parsed.apply(lambda x: x["operation"])
     df["fixture"] = parsed.apply(lambda x: x["fixture"])
     df["gpus"] = df["gpus"].astype(int)
-    df["throughput_mops"] = df["items_per_second"] / 1e6
+    df["throughput_bops"] = df["items_per_second"] / 1e9
 
     return df
 
@@ -81,14 +81,14 @@ def normalize_by_baseline(df: pd.DataFrame, baseline_gpus: int = 2) -> pd.DataFr
                     df.loc[mask, "real_time"] / baseline_time
                 )
                 # Normalize throughput
-                baseline_throughput = df.loc[baseline_mask, "throughput_mops"].values[0]
+                baseline_throughput = df.loc[baseline_mask, "throughput_bops"].values[0]
                 df.loc[mask, "normalized_throughput"] = (
-                    df.loc[mask, "throughput_mops"] / baseline_throughput
+                    df.loc[mask, "throughput_bops"] / baseline_throughput
                 )
             else:
                 # No baseline found, use raw values
                 df.loc[mask, "normalized_time"] = df.loc[mask, "real_time"]
-                df.loc[mask, "normalized_throughput"] = df.loc[mask, "throughput_mops"]
+                df.loc[mask, "normalized_throughput"] = df.loc[mask, "throughput_bops"]
 
     return df
 

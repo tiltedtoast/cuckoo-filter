@@ -66,15 +66,6 @@ executable(
 gossip_dep = subproject('gossip').get_variable('gossip_dep')
 
 executable(
-    'gossip-test',
-    './src/gossip_test.cu',
-    include_directories: includes,
-    dependencies: deps + [gossip_dep],
-    cuda_args: cuda_args,
-    install: true,
-)
-
-executable(
     'cuckoo-filter-multi-gpu',
     './src/multi_gpu_main.cu',
     include_directories: includes,

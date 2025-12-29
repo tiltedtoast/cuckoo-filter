@@ -120,7 +120,7 @@ def main(
     df_filtered = df[df["operation"].isin(["Insert", "Query"])].copy()
 
     df_filtered["time_ms"] = df_filtered["real_time"]
-    df_filtered["throughput_mops"] = df_filtered["items_per_second"] / 1_000_000
+    df_filtered["throughput_bops"] = df_filtered["items_per_second"] / 1_000_000_000
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
 

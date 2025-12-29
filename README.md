@@ -23,7 +23,6 @@ This library provides a GPU-accelerated Cuckoo Filter implementation optimized f
 -   CUDA Toolkit
 -   C++20 compatible compiler
 -   Meson build system (>= 1.3.0)
--   [gossip](https://github.com/Funatiq/gossip) (optional, for multi-GPU support)
 
 ## Building
 

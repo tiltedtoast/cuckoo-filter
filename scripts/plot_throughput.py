@@ -36,7 +36,7 @@ def main(
     """
     Generate throughput comparison plots from benchmark CSV results.
 
-    Plots throughput [M ops/s] vs input size for various benchmarks.
+    Plots throughput [B ops/s] vs input size for various benchmarks.
 
     Examples:
         cat results.csv | plot_throughput.py
@@ -88,8 +88,8 @@ def main(
             size = int(size_str)
             items_per_second = row.get("items_per_second")
             if pd.notna(items_per_second):
-                throughput_mops = items_per_second / 1_000_000
-                benchmark_data[base_name][size] = throughput_mops
+                throughput_bops = items_per_second / 1_000_000_000
+                benchmark_data[base_name][size] = throughput_bops
         except (ValueError, KeyError):
             continue
 
@@ -117,7 +117,7 @@ def main(
         ax.plot(sizes, throughput, "o-", label=bench_name, linewidth=2.5, markersize=8)
 
     ax.set_xlabel("Input Size", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Throughput [B ops/s]", fontsize=14, fontweight="bold")
     ax.set_xscale("log", base=2)
     # ax.set_yscale("log")
     ax.legend(fontsize=10, loc="best", ncol=2, framealpha=0)
