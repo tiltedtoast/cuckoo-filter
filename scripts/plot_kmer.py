@@ -46,12 +46,12 @@ def load_csv_data(csv_path: Path) -> pd.DataFrame:
 
         items_per_second = row.get("items_per_second")
         if pd.notna(items_per_second):
-            throughput_bops = items_per_second / 1_000_000_000
+            throughput_mops = items_per_second / 1_000_000
             results.append(
                 {
                     "filter": filter_type,
                     "operation": operation,
-                    "throughput": throughput_bops,
+                    "throughput": throughput_mops,
                 }
             )
 
@@ -143,7 +143,7 @@ def main(
     pu.format_axis(
         ax,  # ty:ignore[invalid-argument-type]
         "Filter",
-        "Throughput [B ops/s]",
+        "Throughput [M ops/s]",
         title=title,
         xscale=None,
         grid=True,

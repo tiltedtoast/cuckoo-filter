@@ -58,8 +58,8 @@ def main(
             size = int(parts[2])
             items_per_second = row.get("items_per_second")
             if pd.notna(items_per_second):
-                throughput_bops = items_per_second / 1_000_000_000
-                benchmark_data[variant][size] = throughput_bops
+                throughput_mops = items_per_second / 1_000_000
+                benchmark_data[variant][size] = throughput_mops
         except (ValueError, KeyError, IndexError):
             continue
 

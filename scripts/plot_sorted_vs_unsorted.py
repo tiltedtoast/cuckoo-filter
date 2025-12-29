@@ -49,8 +49,8 @@ def extract_benchmark_data(df: pd.DataFrame) -> dict[str, dict[int, float]]:
 
         items_per_second = row.get("items_per_second")
         if pd.notna(items_per_second):
-            throughput_bops = items_per_second / 1_000_000_000  # Convert to B ops/s
-            benchmark_data[bench_name][size] = throughput_bops
+            throughput_mops = items_per_second / 1_000_000  # Convert to M ops/s
+            benchmark_data[bench_name][size] = throughput_mops
 
     return benchmark_data
 
@@ -93,7 +93,7 @@ def main(
     """
     Generate a throughput comparison plot for sorted vs unsorted insertion methods.
 
-    The plot shows throughput (B ops/s) vs input size for:
+    The plot shows throughput (G ops/s) vs input size for:
     - Unsorted: Direct insertion
     - Sorted: Insertion with sorting (sort time included in measurement)
     - Presorted: Insertion with pre-sorted keys (sort time excluded)
@@ -150,7 +150,7 @@ def main(
         )
 
     ax.set_xlabel("Capacity (elements)", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Throughput [B ops/s]", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
     ax.set_xscale("log", base=2)
 
     ax.legend(fontsize=11, loc="best", framealpha=0.9)

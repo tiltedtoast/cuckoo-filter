@@ -88,7 +88,7 @@ def load_and_parse_csv(csv_path: Path) -> pd.DataFrame:
     df["fingerprint_bits"] = parsed.apply(lambda x: x["fingerprint_bits"])
     df["load_factor"] = parsed.apply(lambda x: x["load_factor"])
     df["operation"] = parsed.apply(lambda x: x["operation"])
-    df["throughput_bops"] = df["items_per_second"] / 1e9
+    df["throughput_mops"] = df["items_per_second"] / 1e6
 
     return df
 
@@ -120,7 +120,7 @@ def plot_fpr_comparison_on_axis(
     # Map positive query throughput
     if len(pos_query_df) > 0:
         pos_query_df["config_key"] = pos_query_df.apply(make_config_key, axis=1)
-        pos_lookup = pos_query_df.set_index("config_key")["throughput_bops"].to_dict()
+        pos_lookup = pos_query_df.set_index("config_key")["throughput_mops"].to_dict()
         neg_query_df["positive_query_throughput"] = neg_query_df["config_key"].map(
             pos_lookup
         )
@@ -131,17 +131,17 @@ def plot_fpr_comparison_on_axis(
     neg_query_df["avg_query_throughput"] = neg_query_df.apply(
         lambda r: (
             hit_rate * r["positive_query_throughput"]
-            + (1 - hit_rate) * r["throughput_bops"]
+            + (1 - hit_rate) * r["throughput_mops"]
         )
         if pd.notna(r["positive_query_throughput"])
-        else r["throughput_bops"],
+        else r["throughput_mops"],
         axis=1,
     )
 
     # Map insert throughput
     if len(insert_df) > 0:
         insert_df["config_key"] = insert_df.apply(make_config_key, axis=1)
-        insert_lookup = insert_df.set_index("config_key")["throughput_bops"].to_dict()
+        insert_lookup = insert_df.set_index("config_key")["throughput_mops"].to_dict()
         neg_query_df["insert_throughput"] = neg_query_df["config_key"].map(
             insert_lookup
         )
@@ -152,7 +152,7 @@ def plot_fpr_comparison_on_axis(
     delete_df = df[df["operation"] == "delete"].copy()
     if len(delete_df) > 0:
         delete_df["config_key"] = delete_df.apply(make_config_key, axis=1)
-        delete_lookup = delete_df.set_index("config_key")["throughput_bops"].to_dict()
+        delete_lookup = delete_df.set_index("config_key")["throughput_mops"].to_dict()
         neg_query_df["delete_throughput"] = neg_query_df["config_key"].map(
             delete_lookup
         )
@@ -188,7 +188,7 @@ def plot_fpr_comparison_on_axis(
                 )
             else:
                 query_tp = (
-                    qualifying["throughput_bops"].max() if len(qualifying) > 0 else 0
+                    qualifying["throughput_mops"].max() if len(qualifying) > 0 else 0
                 )
 
             insert_qualifying = qualifying[qualifying["insert_throughput"].notna()]
@@ -256,7 +256,7 @@ def plot_fpr_comparison_on_axis(
 
     if show_xlabel:
         ax.set_xlabel("Target FPR", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Throughput [B ops/s]", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
 
     hit_pct = int(hit_rate * 100)
     title = rf"Best Throughput by Target FPR ({hit_pct}% hit rate)"

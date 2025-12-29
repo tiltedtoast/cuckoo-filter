@@ -112,8 +112,8 @@ def load_csv_data(csv_path: Path) -> dict:
 
         items_per_second = row.get("items_per_second")
         if pd.notna(items_per_second):
-            throughput_bops = items_per_second / 1_000_000_000
-            benchmark_data[operation_type][filter_key][load_factor] = throughput_bops
+            throughput_mops = items_per_second / 1_000_000
+            benchmark_data[operation_type][filter_key][load_factor] = throughput_mops
 
     return benchmark_data, num_elements_per_operation  # ty:ignore[invalid-return-type]
 
@@ -202,7 +202,7 @@ def plot_operation_on_axis(
 
     ax.set_xlabel("Load Factor", fontsize=14, fontweight="bold")
     if show_ylabel:
-        ax.set_ylabel("Throughput [B ops/s]", fontsize=14, fontweight="bold")
+        ax.set_ylabel("Throughput [M ops/s]", fontsize=14, fontweight="bold")
     ax.set_xlim(0.0, 1.0)
     ax.grid(True, which="both", ls="--", alpha=0.3)
 
