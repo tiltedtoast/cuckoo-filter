@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Download genomic datasets for k-mer benchmarking
+
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-GENOME_DIR="$PROJECT_ROOT/data/genomes"
+
+DATA_ROOT="${1:-$PROJECT_ROOT/data}"
+GENOME_DIR="$DATA_ROOT/genomes"
 
 mkdir -p "$GENOME_DIR"
 
