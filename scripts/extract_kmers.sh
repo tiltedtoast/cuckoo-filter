@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -141,6 +140,21 @@ if [ -f "$GENOME_DIR/chicken.fna" ]; then
     echo ""
 else
     echo "Warning: Chicken genome not found, skipping"
+    echo "Run ./scripts/download_genomes.sh first"
+    echo ""
+fi
+
+# Extract k-mers for zebrafish genome
+if [ -f "$GENOME_DIR/zebrafish.fna" ]; then
+    echo ""
+    echo "Zebrafish (Danio rerio)"
+    echo ""
+    for k in "${K_VALUES[@]}"; do
+        extract_kmers "$GENOME_DIR/zebrafish.fna" "zebrafish" "$k"
+    done
+    echo ""
+else
+    echo "Warning: Zebrafish genome not found, skipping"
     echo "Run ./scripts/download_genomes.sh first"
     echo ""
 fi

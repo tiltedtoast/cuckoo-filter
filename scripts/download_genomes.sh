@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +15,7 @@ echo "Output directory: $GENOME_DIR"
 echo ""
 
 # E. coli K-12 MG1655 complete genome
-echo "[1/6] Downloading E. coli K-12 MG1655 genome..."
+echo "[1/7] Downloading E. coli K-12 MG1655 genome..."
 if [ -f "$GENOME_DIR/ecoli_k12_mg1655.fna" ]; then
     echo "Already exists, skipping"
 else
@@ -27,7 +26,7 @@ else
 fi
 
 # Human chromosome 14
-echo "[2/6] Downloading Human chromosome 14..."
+echo "[2/7] Downloading Human chromosome 14..."
 if [ -f "$GENOME_DIR/chr14.fna" ]; then
     echo "Already exists, skipping"
 else
@@ -38,7 +37,7 @@ else
 fi
 
 # Rice Genome (Oryza sativa)
-echo "[3/6] Downloading Rice Genome (Oryza sativa)..."
+echo "[3/7] Downloading Rice Genome (Oryza sativa)..."
 if [ -f "$GENOME_DIR/rice.fna" ]; then
     echo "Already exists, skipping"
 else
@@ -49,7 +48,7 @@ else
 fi
 
 # Chicken Genome (Gallus gallus)
-echo "[4/6] Downloading Chicken Genome (Gallus gallus)..."
+echo "[4/7] Downloading Chicken Genome (Gallus gallus)..."
 if [ -f "$GENOME_DIR/chicken.fna" ]; then
     echo "Already exists, skipping"
 else
@@ -59,8 +58,19 @@ else
     echo "Downloaded and extracted"
 fi
 
+# Zebrafish Genome (Danio rerio)
+echo "[5/7] Downloading Zebrafish Genome (Danio rerio)..."
+if [ -f "$GENOME_DIR/zebrafish.fna" ]; then
+    echo "Already exists, skipping"
+else
+    wget -O "$GENOME_DIR/zebrafish.fna.gz" \
+        "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/002/035/GCF_000002035.6_GRCz11/GCF_000002035.6_GRCz11_genomic.fna.gz"
+    gunzip "$GENOME_DIR/zebrafish.fna.gz"
+    echo "Downloaded and extracted"
+fi
+
 # Full Human Genome
-echo "[5/6] Downloading Full Human Genome..."
+echo "[6/7] Downloading Full Human Genome..."
 if [ -f "$GENOME_DIR/human_grch38.fna" ]; then
     echo "Already exists, skipping"
 else
@@ -71,7 +81,7 @@ else
 fi
 
 # Wheat Genome (Triticum aestivum)
-echo "[6/6] Downloading Wheat Genome (Triticum aestivum)..."
+echo "[7/7] Downloading Wheat Genome (Triticum aestivum)..."
 if [ -f "$GENOME_DIR/wheat.fna" ]; then
     echo "Already exists, skipping"
 else

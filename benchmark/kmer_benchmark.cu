@@ -204,10 +204,9 @@ static void TCF_Query(bm::State& state) {
     filter->bulk_insert(thrust::raw_pointer_cast(g_deviceKeys->data()), n, d_misses);
     cudaDeviceSynchronize();
 
-    bool* d_output = nullptr;
     for (auto _ : state) {
         timer.start();
-        d_output = filter->bulk_query(thrust::raw_pointer_cast(g_deviceKeys->data()), n);
+        bool* d_output = filter->bulk_query(thrust::raw_pointer_cast(g_deviceKeys->data()), n);
         cudaDeviceSynchronize();
         double elapsed = timer.elapsed();
 
@@ -243,12 +242,13 @@ static void TCF_Delete(bm::State& state) {
         cudaDeviceSynchronize();
 
         timer.start();
-        filter->bulk_delete(thrust::raw_pointer_cast(g_deviceKeys->data()), n);
+        bool* d_results = filter->bulk_delete(thrust::raw_pointer_cast(g_deviceKeys->data()), n);
         cudaDeviceSynchronize();
         double elapsed = timer.elapsed();
 
         state.SetIterationTime(elapsed);
-        bm::DoNotOptimize(filter);
+        bm::DoNotOptimize(d_results);
+        cudaFree(d_results);
         TCFType::host_free_tcf(filter);
     }
 
