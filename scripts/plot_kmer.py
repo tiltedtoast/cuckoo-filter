@@ -23,7 +23,7 @@ app = typer.Typer(help="Plot k-mer benchmark results")
 
 def extract_filter_and_operation(name: str) -> tuple[Optional[str], Optional[str]]:
     """Extract filter type and operation from benchmark name like 'GPUCF_Insert'."""
-    match = re.match(r"(\w+)_(Insert|Query)", name)
+    match = re.match(r"(\w+)_(Insert|Query|Delete)", name)
     if match:
         return match.group(1), match.group(2)
     return None, None
@@ -46,7 +46,7 @@ def load_csv_data(csv_path: Path) -> pd.DataFrame:
 
         items_per_second = row.get("items_per_second")
         if pd.notna(items_per_second):
-            throughput_mops = items_per_second / 1_000_000
+            throughput_mops = int(items_per_second / 1_000_000)
             results.append(
                 {
                     "filter": filter_type,
@@ -87,13 +87,14 @@ def main(
 
     output_dir = pu.resolve_output_dir(output_dir, Path(__file__))
 
-    # Get unique filters and operations from data
-    filters = df["filter"].unique().tolist()
-    operations = ["Insert", "Query"]
+    filter_order = ["GPUCF", "Bloom", "TCF", "GQF"]
+    filters = [f for f in filter_order if f in df["filter"].values]
+    operations = ["Query", "Insert", "Delete"]
 
     fig, ax = pu.setup_figure(figsize=(10, 6))
 
-    bar_width = 0.35
+    n_operations = len(operations)
+    bar_width = 0.25
     x_positions = range(len(filters))
 
     for i, operation in enumerate(operations):
@@ -103,9 +104,21 @@ def main(
             if not subset.empty:
                 throughputs.append(subset["throughput"].values[0])
             else:
+                # Bloom doesn't support Delete, so use 0
                 throughputs.append(0)
 
-        offset = (i - 0.5) * bar_width
+        # Center the bars around each x position
+        offset = (i - (n_operations - 1) / 2) * bar_width
+
+        hatch = None
+        alpha = 1.0
+        if operation == "Insert":
+            hatch = "//"
+            alpha = 0.8
+        elif operation == "Delete":
+            hatch = "--"
+            alpha = 0.8
+
         bars = ax.bar(
             [x + offset for x in x_positions],
             throughputs,
@@ -114,6 +127,8 @@ def main(
             color=pu.OPERATION_COLORS.get(operation, "#333333"),
             edgecolor="black",
             linewidth=0.5,
+            hatch=hatch,
+            alpha=alpha,
         )
 
         # Add value labels on bars
@@ -122,7 +137,7 @@ def main(
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
                     bar.get_height(),
-                    f"{val:.2f}",
+                    f"{val:.0f}",
                     ha="center",
                     va="bottom",
                     fontsize=pu.LEGEND_FONT_SIZE,
@@ -152,8 +167,7 @@ def main(
     ax.set_xticklabels(filter_labels, fontsize=pu.DEFAULT_FONT_SIZE)
     pu.create_legend(
         ax,  # ty:ignore[invalid-argument-type]
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1),
+        loc="upper right",
         fontsize=pu.DEFAULT_FONT_SIZE,
     )
 

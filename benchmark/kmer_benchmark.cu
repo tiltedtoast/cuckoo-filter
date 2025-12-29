@@ -118,6 +118,38 @@ static void GPUCF_Query(bm::State& state) {
     setCommonCounters(state, filterMemory, n);
 }
 
+static void GPUCF_Delete(bm::State& state) {
+    GPUTimer timer;
+    ensureDeviceKeys();
+
+    size_t n = g_kmerData.size();
+    auto capacity = static_cast<size_t>(n / LOAD_FACTOR);
+
+    auto filter = std::make_unique<CuckooFilter<Config>>(capacity);
+    size_t filterMemory = filter->sizeInBytes();
+
+    adaptiveInsert(*filter, *g_deviceKeys);
+    cudaDeviceSynchronize();
+
+    thrust::device_vector<uint8_t> d_output(n);
+
+    for (auto _ : state) {
+        // Re-insert before each delete iteration
+        filter->clear();
+        adaptiveInsert(*filter, *g_deviceKeys);
+        cudaDeviceSynchronize();
+
+        timer.start();
+        filter->deleteMany(*g_deviceKeys, d_output);
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(d_output.data().get());
+    }
+
+    setCommonCounters(state, filterMemory, n);
+}
+
 static void TCF_Insert(bm::State& state) {
     GPUTimer timer;
     ensureDeviceKeys();
@@ -189,6 +221,41 @@ static void TCF_Query(bm::State& state) {
     setCommonCounters(state, filterMemory, n);
 }
 
+static void TCF_Delete(bm::State& state) {
+    GPUTimer timer;
+    ensureDeviceKeys();
+
+    size_t n = g_kmerData.size();
+
+    constexpr double TCF_CAPACITY_FACTOR = 0.85;
+    auto requiredUsableCapacity = static_cast<size_t>(n / LOAD_FACTOR);
+    auto capacity = static_cast<size_t>(requiredUsableCapacity / TCF_CAPACITY_FACTOR);
+
+    size_t filterMemory = capacity * sizeof(uint16_t);
+
+    uint64_t* d_misses;
+    cudaMalloc(&d_misses, sizeof(uint64_t));
+
+    for (auto _ : state) {
+        TCFType* filter = TCFType::host_build_tcf(capacity);
+        cudaMemset(d_misses, 0, sizeof(uint64_t));
+        filter->bulk_insert(thrust::raw_pointer_cast(g_deviceKeys->data()), n, d_misses);
+        cudaDeviceSynchronize();
+
+        timer.start();
+        filter->bulk_delete(thrust::raw_pointer_cast(g_deviceKeys->data()), n);
+        cudaDeviceSynchronize();
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(filter);
+        TCFType::host_free_tcf(filter);
+    }
+
+    cudaFree(d_misses);
+    setCommonCounters(state, filterMemory, n);
+}
+
 static void GQF_Insert(bm::State& state) {
     GPUTimer timer;
     ensureDeviceKeys();
@@ -253,6 +320,37 @@ static void GQF_Query(bm::State& state) {
     }
 
     qf_destroy_device(qf);
+    setCommonCounters(state, filterMemory, n);
+}
+
+static void GQF_Delete(bm::State& state) {
+    GPUTimer timer;
+    ensureDeviceKeys();
+
+    size_t n = g_kmerData.size();
+    auto capacity = static_cast<size_t>(n / LOAD_FACTOR);
+
+    auto q = static_cast<uint32_t>(std::log2(capacity)) + 1;
+    capacity = 1ULL << q;
+
+    size_t filterMemory = (capacity * QF_BITS_PER_SLOT) / 8;
+
+    for (auto _ : state) {
+        QF* qf;
+        qf_malloc_device(&qf, q, true);
+        bulk_insert(qf, n, thrust::raw_pointer_cast(g_deviceKeys->data()), 0);
+        cudaDeviceSynchronize();
+
+        timer.start();
+        bulk_delete(qf, n, thrust::raw_pointer_cast(g_deviceKeys->data()), QF_NO_LOCK);
+        cudaDeviceSynchronize();
+        double elapsed = timer.elapsed();
+
+        state.SetIterationTime(elapsed);
+        bm::DoNotOptimize(qf);
+        qf_destroy_device(qf);
+    }
+
     setCommonCounters(state, filterMemory, n);
 }
 
@@ -334,10 +432,13 @@ static void Bloom_Query(bm::State& state) {
 
 BENCHMARK(GPUCF_Insert) KMER_CONFIG;
 BENCHMARK(GPUCF_Query) KMER_CONFIG;
+BENCHMARK(GPUCF_Delete) KMER_CONFIG;
 BENCHMARK(TCF_Insert) KMER_CONFIG;
 BENCHMARK(TCF_Query) KMER_CONFIG;
+BENCHMARK(TCF_Delete) KMER_CONFIG;
 BENCHMARK(GQF_Insert) KMER_CONFIG;
 BENCHMARK(GQF_Query) KMER_CONFIG;
+BENCHMARK(GQF_Delete) KMER_CONFIG;
 BENCHMARK(Bloom_Insert) KMER_CONFIG;
 BENCHMARK(Bloom_Query) KMER_CONFIG;
 
