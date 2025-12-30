@@ -49,16 +49,16 @@ using Config = CuckooConfig<uint64_t, 16, 500, 256, 16>;
 CuckooFilter<Config> filter(1 << 20);  // capacity for ~1M items
 
 // Insert keys (d_keys is a device pointer)
-filter.insertMany(d_keys, numkeys);
+filter.insertMany(d_keys, numKeys);
 
 // Or use sorted insertion
-filter.insertManySorted(d_keys, numkeys);
+filter.insertManySorted(d_keys, numKeys);
 
 // Check membership
-filter.containsMany(d_keys, d_results, numkeys);
+filter.containsMany(d_keys, d_results, numKeys);
 
 // Delete keys
-filter.deleteMany(d_keys, d_results, numkeys);
+filter.deleteMany(d_keys, d_results, numKeys);
 ```
 
 ### Configuration Options
