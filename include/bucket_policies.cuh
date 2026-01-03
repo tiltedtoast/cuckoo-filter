@@ -205,7 +205,6 @@ struct OffsetAltBucketPolicy {
     static constexpr TagType pureFpMask = (TagType(1) << choiceBitPos) - 1;
     static constexpr size_t fpMask = (1ULL << bitsPerTag) - 1;
 
-    // Trait: this policy uses a choice bit
     static constexpr bool usesChoiceBit = true;
 
     static constexpr char name[] = "OffsetAltBucketPolicy";
