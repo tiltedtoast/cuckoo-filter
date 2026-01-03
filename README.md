@@ -20,7 +20,7 @@ This library provides a GPU-accelerated Cuckoo Filter implementation optimized f
 
 ## Requirements
 
--   CUDA Toolkit
+-   CUDA Toolkit (>= 12.9)
 -   C++20 compatible compiler
 -   Meson build system (>= 1.3.0)
 
